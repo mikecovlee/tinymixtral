@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Generated — rebuild with scripts
+checkpoints/
+data/
+tokenizer/
+
+# Eval outputs (source code in evals/ is tracked)
+evals/run/
+evals/baseline/
+
+# Logs
+*.log
+
+# Conda
+.env/
+
+# Publish
+publish/
