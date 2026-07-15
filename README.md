@@ -2,6 +2,20 @@
 
 A small Mixtral-style Mixture-of-Experts causal language model (~432M total, ~176M active parameters) for pretraining research on a single consumer GPU.
 
+[![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral-yellow)](https://huggingface.co/mikecovlee/tinymixtral)
+
+## Pretrained Model
+
+```python
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained(
+    "mikecovlee/tinymixtral", trust_remote_code=True
+)
+```
+
+The model is available on HuggingFace Hub at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral). It was trained on 4B tokens of C4-en.
+
 ## Model Architecture
 
 | Parameter | Value |
@@ -118,6 +132,8 @@ Zero-shot evaluation uses conditional log-likelihood scoring: each candidate ans
 
 ## Publishing to HuggingFace
 
+A pretrained model is already available at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral). To export your own trained checkpoint:
+
 ```bash
 python scripts/publish_hf.py \
   --checkpoint checkpoints/run/step_0177557_final \
@@ -133,20 +149,31 @@ This creates a self-contained `publish/` directory with:
 - Tokenizer files
 - LICENSE
 
-Load with:
+Load local or push to Hub:
 
 ```python
 from transformers import AutoModelForCausalLM
+
+# Local directory
 model = AutoModelForCausalLM.from_pretrained("publish/", trust_remote_code=True)
+
+# Push to your own HF Hub repo
+from huggingface_hub import HfApi
+api = HfApi()
+api.create_repo("your-username/tinymixtral", exist_ok=True)
+api.upload_folder(repo_id="your-username/tinymixtral", folder_path="publish/")
 ```
 
 ## Interactive Chat
 
 ```bash
-# Native model loader
+# From HuggingFace Hub
+python scripts/chat_hf.py mikecovlee/tinymixtral
+
+# From local checkpoint (native model loader)
 python scripts/chat.py --checkpoint checkpoints/run/step_0177557_final --tokenizer tokenizer/
 
-# HF AutoModel loader
+# From local publish directory
 python scripts/chat_hf.py publish/
 ```
 
