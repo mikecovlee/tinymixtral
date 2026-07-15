@@ -2,7 +2,7 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 """从 checkpoint 恢复训练，自动沿用原始 token/step 目标。"""
-import sys, argparse, glob
+import math, sys, argparse, glob
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -23,6 +23,10 @@ def main():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--wd", type=float, default=0.1)
     p.add_argument("--warmup-steps", type=int, default=2000)
+    p.add_argument("--max-tokens", type=int, default=None,
+                   help="覆盖 checkpoint 中的训练目标（post-training 用）")
+    p.add_argument("--output-dir", default=None,
+                   help="输出目录（默认同 checkpoint-dir，post-training 建议指定新目录）")
     p.add_argument("--save-every-min", type=int, default=120)
     p.add_argument("--keep-last-checkpoints", type=int, default=5)
     p.add_argument("--log-every", type=int, default=100)
@@ -64,13 +68,12 @@ def main():
     nM = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Model: {nM:.0f}M params", flush=True)
 
-    # ---- 优化器 + schedule ----
+    # ---- 优化器 + state ----
     bs, seq = args.batch_size, args.seq_len
     chunk = (seq + 1) * bs
 
     opt = make_adamw(model, lr=args.lr, weight_decay=args.wd)
 
-    # ---- 恢复 optimizer state ----
     state_path = latest / "training_state.pt"
     total_tok = step_done * bs * seq
     if state_path.exists():
@@ -92,46 +95,68 @@ def main():
         total_tok = state.get("total_tok", total_tok)
         print(f"Loaded optimizer+scheduler state", flush=True)
 
-    saved_bs = state.get("batch_size")
-    saved_seq = state.get("seq_len")
-    if saved_bs is not None and (saved_bs != bs or saved_seq != seq):
-        p.error(
-            f"checkpoint uses batch-size={saved_bs}, seq-len={saved_seq}; "
-            f"got batch-size={bs}, seq-len={seq}"
-        )
+        saved_bs = state.get("batch_size")
+        saved_seq = state.get("seq_len")
+        if saved_bs is not None and (saved_bs != bs or saved_seq != seq):
+            p.error(
+                f"checkpoint uses batch-size={saved_bs}, seq-len={saved_seq}; "
+                f"got batch-size={bs}, seq-len={seq}"
+            )
+    else:
+        state = {}
 
-    warmup = state.get("warmup_steps", args.warmup_steps)
-    total_steps = state["total_steps"]
-    print(f"Target: warmup={warmup} total_steps={total_steps}", flush=True)
-    if step_done > total_steps:
-        p.error(f"checkpoint step {step_done} exceeds target {total_steps}")
-    if step_done == total_steps and latest.name.endswith("_final"):
-        print(f"Training already complete: {latest}", flush=True)
-        return
-    check_checkpoint_disk_space(model, ckpt_dir, args.keep_last_checkpoints)
+    # ---- 确定训练目标 ----
+    output_dir = args.output_dir or args.checkpoint_dir
+    is_posttrain = args.max_tokens is not None
 
-    saved_lrs = [pg["lr"] for pg in opt.param_groups]
-    sched = make_cosine_schedule(opt, warmup, total_steps)
-    for pg, lr in zip(opt.param_groups, saved_lrs):
-        pg["lr"] = lr
-    if "sched" in state:
-        sched.load_state_dict(state["sched"])
-        current_lr = opt.param_groups[0]["lr"]
-        expected_lr = state["sched"].get("_last_lr", [current_lr])[0]
-        if abs(current_lr - expected_lr) > 1e-8:
-            print(f"  WARNING: LR mismatch after resume "
-                  f"(current={current_lr:.6e} expected={expected_lr:.6e})", flush=True)
+    if is_posttrain:
+        warmup = args.warmup_steps
+        total_steps = math.ceil(args.max_tokens / (bs * seq))
+        tokens_per_step = bs * seq
+        target_tokens = total_steps * tokens_per_step
+        total_tok = 0
+        step_done = 0
+        fi, ptr = 0, 0
+        print(f"Post-training target: {total_steps:,} steps / ~{target_tokens / 1e9:.2f}B tokens "
+              f"lr={args.lr:.1e} warmup={warmup}", flush=True)
+    else:
+        warmup = state.get("warmup_steps", args.warmup_steps)
+        total_steps = state["total_steps"]
+        print(f"Target: warmup={warmup} total_steps={total_steps}", flush=True)
+        if step_done > total_steps:
+            p.error(f"checkpoint step {step_done} exceeds target {total_steps}")
+        if step_done == total_steps and latest.name.endswith("_final"):
+            print(f"Training already complete: {latest}", flush=True)
+            return
+        fi, ptr = None, None  # 后面从 checkpoint 或 fallback 计算
+
+    check_checkpoint_disk_space(model, output_dir, args.keep_last_checkpoints)
+
+    if is_posttrain:
+        # Post-training: 保留 optimizer 动量，重建 scheduler 从新 warmup 开始
+        sched = make_cosine_schedule(opt, warmup, total_steps)
+        print(f"Starting fresh cosine schedule: warmup={warmup} total={total_steps}", flush=True)
+    else:
+        saved_lrs = [pg["lr"] for pg in opt.param_groups]
+        sched = make_cosine_schedule(opt, warmup, total_steps)
+        for pg, lr in zip(opt.param_groups, saved_lrs):
+            pg["lr"] = lr
+        if "sched" in state:
+            sched.load_state_dict(state["sched"])
 
     # ---- 计算 shard+ptr ----
     files = sorted(glob.glob(f"{args.cache_dir}/train_*.pt"))
     if not files:
         print(f"ERROR: no .pt shards in {args.cache_dir}", flush=True); sys.exit(1)
-    # 优先从 checkpoint 恢复位置
-    if state_path.exists() and "fi" in state:
+    if is_posttrain:
+        # 新数据集从头开始，fi=0, ptr=0 already set above
+        pass
+    elif state_path.exists() and "fi" in state:
+        # 优先从 checkpoint 恢复位置
         fi = state["fi"]
         ptr = state["ptr"]
     else:
-        # Fallback: 根据 total_tok 计算位置，对全量 token 取模以支持多轮
+        # Fallback: 根据 total_tok 计算位置
         total_corpus_tokens = sum(
             len(torch.load(f, weights_only=True, mmap=True)) for f in files
         )
@@ -154,7 +179,7 @@ def main():
     step, total_tok, fi, ptr, elapsed = training_loop(
         model, opt, sched, files, fi=fi, ptr=ptr, total_tok=total_tok,
         bs=bs, seq=seq, chunk=chunk,
-        output_dir=str(ckpt_dir), max_steps=total_steps,
+        output_dir=output_dir, max_steps=total_steps,
         save_every_min=args.save_every_min, log_every=args.log_every,
         step_start=step_done, schedule_args=schedule_args,
         eval_on_save=args.eval_on_save,
@@ -162,7 +187,7 @@ def main():
     )
 
     final_save(
-        model, opt, sched, str(ckpt_dir), step, total_tok, elapsed,
+        model, opt, sched, output_dir, step, total_tok, elapsed,
         fi, ptr, bs, seq, schedule_args,
     )
 

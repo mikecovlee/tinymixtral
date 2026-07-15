@@ -98,6 +98,48 @@ python scripts/resume.py --batch-size 22
 
 The script automatically locates the latest checkpoint, restores model/optimizer/scheduler state, and continues from the exact data position. Batch size, sequence length, and training target are read from the checkpoint.
 
+## Post-Training
+
+Continue training on higher-quality data to boost model capabilities. The example below uses the SmolLM blend (FineWeb-Edu + Cosmopedia v2, 50/50) for 1B tokens.
+
+```bash
+# 1. Tokenize FineWeb-Edu (~500M tokens)
+python scripts/prepare_data.py \
+  --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
+  --tokenizer tokenizer/ --output data/posttrain/fineweb \
+  --max-tokens 500000000 --force
+
+# 2. Tokenize Cosmopedia v2 (~500M tokens)
+python scripts/prepare_data.py \
+  --dataset HuggingFaceTB/cosmopedia-v2 --subset auto \
+  --tokenizer tokenizer/ --output data/posttrain/cosmopedia \
+  --max-tokens 500000000 --force
+
+# 3. Interleave shards (50/50)
+python scripts/mix_data.py data/posttrain/fineweb data/posttrain/cosmopedia \
+  --output data/posttrain/mixed
+
+# 4. Post-train from pretrained checkpoint
+python scripts/resume.py \
+  --checkpoint-dir checkpoints/run \
+  --output-dir checkpoints/posttrain \
+  --cache-dir data/posttrain/mixed \
+  --max-tokens 1000000000 --lr 5e-5 --warmup-steps 300 \
+  --batch-size 22 --save-every-min 60
+```
+
+Key differences from pretraining:
+
+| Aspect | Pretrain | Post-train |
+|--------|----------|------------|
+| Data | C4-en (noisy) | FineWeb-Edu + Cosmopedia (curated) |
+| LR | 3e-4 | 5e-5 (lower, to avoid forgetting) |
+| Warmup | 2,000 steps | 300 steps (short re-warmup) |
+| Schedule | Cosine from scratch | Fresh cosine, AdamW momentum preserved |
+| Target | 4B tokens | 1–4B tokens |
+
+`--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining. Output goes to `--output-dir`, keeping pretrain checkpoints untouched.
+
 ## Evaluation
 
 ### GLUE Benchmark (zero-shot)
@@ -204,6 +246,7 @@ tinymixtral/
 │   ├── publish_hf.py               # HF-format export
 │   ├── prepare_data.py             # Dataset pre-tokenization
 │   ├── prepare_tokenizer.py        # Tokenizer download / training
+│   ├── mix_data.py                 # Interleave shards from multiple datasets
 │   ├── benchmark.py                # GPU memory/throughput profiler
 │   └── search.py                   # Hyperparameter search
 ├── configs/                        # Config templates
