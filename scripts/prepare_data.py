@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """预 tokenize 数据集到本地 .pt 文件，消除训练时的数据加载瓶颈。
 
 用法:

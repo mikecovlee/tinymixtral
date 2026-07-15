@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """预训练：从零开始，按 token 或 step 目标运行。"""
 import sys, argparse, glob, math
 from pathlib import Path

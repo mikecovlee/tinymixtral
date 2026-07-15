@@ -1,3 +1,6 @@
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
+
 """Zero-shot prompt scoring：用条件 log-likelihood 给 label 打分。
 
 核心逻辑：

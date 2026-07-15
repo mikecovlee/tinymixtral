@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """Zero-shot GLUE 评测脚本。
 
 用法:
     # 快速评测
-    python scripts/eval_glue.py \
-        --checkpoint checkpoints/run_001/step_5000 \
-        --tokenizer tokenizer/ \
-        --tasks quick --limit 500 \
+    python scripts/eval_glue.py \\
+        --checkpoint checkpoints/run_001/step_5000 \\
+        --tokenizer tokenizer/ \\
+        --tasks quick --limit 500 \\
         --output evals/run_001/step_5000.json
 
     # 全量评测
-    python scripts/eval_glue.py \
-        --checkpoint checkpoints/run_001/step_5000 \
-        --tokenizer tokenizer/ \
-        --tasks all \
+    python scripts/eval_glue.py \\
+        --checkpoint checkpoints/run_001/step_5000 \\
+        --tokenizer tokenizer/ \\
+        --tasks all \\
         --output evals/run_001/step_5000_full.json
 """
 

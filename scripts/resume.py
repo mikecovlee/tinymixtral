@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """从 checkpoint 恢复训练，自动沿用原始 token/step 目标。"""
 import sys, argparse, glob
 from pathlib import Path

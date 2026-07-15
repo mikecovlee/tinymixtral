@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """硬件适配 Benchmark：测显存 + GPU 利用率，找模型/batch 最佳平衡点。
 
 用法:

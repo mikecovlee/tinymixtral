@@ -1,3 +1,5 @@
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """train.py 和 resume.py 共享的训练逻辑。"""
 
 import math, sys, time, os, shutil, subprocess, json, signal

@@ -1,3 +1,6 @@
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
+
 """GLUE 任务定义、模板和 verbalizer。"""
 
 from dataclasses import dataclass, field

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """与训练好的 TinyMixtral 模型交互式对话。
 
 用法:
@@ -55,7 +57,7 @@ def generate(model, tokenizer, prompt, max_new_tokens=256, temperature=0.7, top_
             sorted_mask[:, 1:] = sorted_mask[:, :-1].clone()
             sorted_mask[:, 0] = False
             indices_to_remove = sorted_mask.scatter(1, sorted_indices, sorted_mask)
-            logits[indices_to_remove] = -float("inf")
+            logits = logits.masked_fill(indices_to_remove, -float("inf"))
 
         probs = F.softmax(logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1)

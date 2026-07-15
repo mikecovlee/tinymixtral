@@ -1,3 +1,6 @@
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
+
 """TinyMixtral——小型 Mixtral 风格 MoE 因果语言模型。
 
 架构：

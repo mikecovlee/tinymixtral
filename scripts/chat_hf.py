@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """用 HuggingFace AutoModel 加载 TinyMixtral 进行交互对话。
 
 用法:

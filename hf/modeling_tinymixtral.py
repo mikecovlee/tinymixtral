@@ -230,7 +230,7 @@ class TinyMixtralForCausalLM(PreTrainedModel):
                 labels.reshape(-1),
                 ignore_index=-100,
             )
-            loss = loss + self.config.router_aux_loss_coef * total_aux
+            loss = loss + self.config.router_aux_loss_coef * (total_aux / len(self.layers))
 
         if not return_dict:
             return (loss, logits) if loss is not None else (logits,)

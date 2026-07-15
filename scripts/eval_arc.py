@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
 """ARC (AI2 Reasoning Challenge) 评测，支持 zero-shot / few-shot。
 
 用法:

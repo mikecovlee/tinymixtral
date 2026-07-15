@@ -1,3 +1,6 @@
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
+
 """评测指标：accuracy, F1, Matthews correlation。"""
 
 from sklearn.metrics import (

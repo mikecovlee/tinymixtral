@@ -1,0 +1,5 @@
+torch>=2.0
+transformers>=4.50
+datasets>=3.0
+sentencepiece>=0.2
+scikit-learn>=1.3

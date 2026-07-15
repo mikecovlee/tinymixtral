@@ -2,11 +2,18 @@
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+.venv/
+venv/
 
 # IDE
 .idea/
 .vscode/
 .DS_Store
+
+# Pyenv
+.python-version
 
 # Generated — rebuild with scripts
 checkpoints/
