@@ -14,7 +14,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 ```
 
-The model is available on HuggingFace Hub at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral). It was trained on 4B tokens of C4-en.
+The pretrained model is available on HuggingFace Hub at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral).
 
 ## Model Architecture
 
@@ -111,7 +111,7 @@ python scripts/prepare_data.py \
 
 # 2. Tokenize Cosmopedia v2 (~500M tokens)
 python scripts/prepare_data.py \
-  --dataset HuggingFaceTB/cosmopedia-v2 --subset auto \
+  --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
   --tokenizer tokenizer/ --output data/posttrain/cosmopedia \
   --max-tokens 500000000 --force
 
@@ -273,9 +273,41 @@ tinymixtral/
 
 7. **Signal handling** — SIGINT/SIGTERM triggers a clean save after the current step completes.
 
-## Results (4B tokens, C4-en)
+## Results
 
-Training converged from loss ~10.5 to ~3.0 with stable aux_loss (~1.0). As expected for a 176M-active-parameter model evaluated zero-shot, GLUE and ARC scores reflect the model's limited capacity — these results establish the baseline for future iterations.
+### Training Summary
+
+| Phase | Data | Tokens | Steps | Time | Start Loss | End Loss |
+|-------|------|:------:|:-----:|:----:|:----------:|:--------:|
+| Pretrain | C4-en | 4B | 177,557 | 77.1 h | 10.5 | 3.0 |
+| Post-train | FineWeb-Edu + Cosmopedia v2 (50:50) | 1B | 44,390 | 20.8 h | 3.05 | 2.0 |
+
+Post-training used learning rate 5e-5 with 300-step re-warmup, continuing from the pretrain checkpoint with AdamW momentum preserved.
+
+### GLUE (zero-shot)
+
+| Task | Metric | Pretrain (4B C4) | Post-train (5B total) |
+|------|--------|:---:|:---:|
+| SST2 | accuracy | 0.470 | **0.554** |
+| MRPC | accuracy / f1 | 0.338 / 0.069 | **0.706 / 0.815** |
+| QQP | accuracy / f1 | 0.470 / 0.412 | **0.530** / 0.342 |
+| QNLI | accuracy | 0.494 | 0.452 |
+| RTE | accuracy | 0.520 | 0.484 |
+| CoLA | MCC | 0.089 | 0.006 |
+| MNLI | accuracy | 0.348 | 0.348 |
+| MNLI-mm | accuracy | 0.368 | 0.368 |
+| **Mean** | — | **0.403** | **0.483** |
+
+### ARC
+
+| Task | Pretrain (4B C4) | Post-train (5B total) |
+|------|:---:|:---:|
+| ARC-C 0-shot | 0.220 | **0.233** |
+| ARC-C 5-shot | 0.223 | **0.246** |
+| ARC-E 0-shot | 0.311 | **0.342** |
+| ARC-E 5-shot | 0.320 | **0.348** |
+
+Zero-shot evaluation uses conditional log-likelihood scoring over answer spans. All evals run on a single GPU with `--limit 500 --batch-size 16 --max-length 512`. Pretrain and post-train evaluated under identical settings for fair comparison.
 
 ## License
 
