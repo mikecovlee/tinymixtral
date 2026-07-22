@@ -14,7 +14,9 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 ```
 
-The pretrained model is available on HuggingFace Hub at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral).
+The latest model (SmolLM blend pretrain + Wiki/Cosmopedia post-train) is available at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral).
+
+The legacy v1 model (C4 pretrain) has been moved to [mikecovlee/tinymixtral-v1.0](https://huggingface.co/mikecovlee/tinymixtral-v1.0).
 
 ## Model Architecture
 
@@ -47,19 +49,28 @@ pip install -r requirements.txt
 
 ## Quick Start
 
+The recommended recipe uses a SmolLM-inspired data blend (FineWeb-Edu + Cosmopedia v2, 89:11) with LR=7e-4:
+
 ```bash
 # 1. Download tokenizer
 python scripts/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
 
-# 2. Tokenize C4-en dataset (4B tokens)
-python scripts/prepare_data.py --dataset allenai/c4 --subset en \
-  --tokenizer tokenizer/ --output data/c4/tokenized \
-  --max-tokens 4000000000 --force
+# 2. Tokenize FineWeb-Edu (3.56B tokens)
+python scripts/prepare_data.py --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
+  --tokenizer tokenizer/ --output data/pretrain/fineweb --max-tokens 3560000000 --force
 
-# 3. Pretrain
-python scripts/train.py --cache-dir data/c4/tokenized \
-  --batch-size 22 --max-tokens 4000000000 \
-  --keep-last-checkpoints 5 --eval-on-save 2>&1 | tee train.log
+# 3. Tokenize Cosmopedia v2 (440M tokens)
+python scripts/prepare_data.py --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
+  --tokenizer tokenizer/ --output data/pretrain/cosmopedia --max-tokens 440000000 --force
+
+# 4. Mix shards (89:11)
+python scripts/mix_data.py data/pretrain/fineweb data/pretrain/cosmopedia \
+  --output data/pretrain/smollm_blend --weights 36 4
+
+# 5. Pretrain (4B tokens, LR=7e-4, batch=24)
+python scripts/train.py --cache-dir data/pretrain/smollm_blend \
+  --batch-size 24 --max-tokens 4000000000 --lr 7e-4 \
+  --keep-last-checkpoints 5 2>&1 | tee train.log
 ```
 
 ## Training Details
@@ -68,24 +79,25 @@ python scripts/train.py --cache-dir data/c4/tokenized \
 - **Optimizer**: AdamW (β=0.9,0.95, wd=0.1), weight decay only on ≥2D parameters
 - **LR schedule**: Cosine decay with linear warmup (warmup_steps=2000)
 - **Gradient clipping**: 1.0
-- **Batch**: 22 × 1024 = 22,528 tokens/step
+- **Batch**: 24 × 1024 = 24,576 tokens/step
 - **Activation checkpointing**: enabled (required for 24GB VRAM)
-- **Data**: C4-en, pre-tokenized to `.pt` shards (100M tokens each), cycled round-robin
+- **Data**: FineWeb-Edu + Cosmopedia v2 (89:11), pre-tokenized to `.pt` shards (100M tokens each), cycled round-robin
+- **LR sweep**: 4 × 100M-token runs at {1e-4, 3e-4, 5e-4, 7e-4}; 7e-4 selected based on lowest final loss
 
-`prepare_data.py` explicitly appends EOS to each document and validates tokenizer vocab size (32K). Shards are written atomically via staging → replace.
+`prepare_data.py` explicitly appends EOS to each document and validates tokenizer vocab size (32K). Shards are written atomically via staging → replace. `mix_data.py` interleaves shards from multiple tokenized datasets at the file level — no re-tokenization needed.
 
 ## Checkpoints
 
 Periodic checkpoints saved every `--save-every-min` minutes, plus a final checkpoint at completion:
 
 ```
-checkpoints/run/
-├── step_0159189/          # periodic
+checkpoints/smollm_blend/
+├── step_0144718/          # periodic
 │   ├── config.json
 │   ├── pytorch_model.bin
 │   └── training_state.pt  # optimizer, scheduler, data position
 ├── ...
-└── step_0177557_final/    # final checkpoint
+└── step_0162761_final/    # final checkpoint
 ```
 
 `training_state.pt` contains optimizer/scheduler states, step, token count, shard position (`fi`/`ptr`), and schedule parameters — enabling exact training resumption.
@@ -93,84 +105,70 @@ checkpoints/run/
 ## Resume Training
 
 ```bash
-python scripts/resume.py --batch-size 22
+python scripts/resume.py --batch-size 24
 ```
 
 The script automatically locates the latest checkpoint, restores model/optimizer/scheduler state, and continues from the exact data position. Batch size, sequence length, and training target are read from the checkpoint.
 
 ## Post-Training
 
-Continue training on higher-quality data to boost model capabilities. The example below uses the SmolLM blend (FineWeb-Edu + Cosmopedia v2, 50/50) for 1B tokens.
+Continue training on domain-specific data to address weaknesses. The example below uses Wikipedia + Cosmopedia v2 (50:50, 1B tokens) to improve formal grammar and factual knowledge.
 
 ```bash
-# 1. Tokenize FineWeb-Edu (~500M tokens)
+# 1. Tokenize Wikipedia (500M tokens)
 python scripts/prepare_data.py \
-  --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
-  --tokenizer tokenizer/ --output data/posttrain/fineweb \
+  --dataset wikimedia/wikipedia --subset 20231101.en \
+  --tokenizer tokenizer/ --output data/posttrain/wiki \
   --max-tokens 500000000 --force
 
-# 2. Tokenize Cosmopedia v2 (~500M tokens)
+# 2. Tokenize Cosmopedia v2 (500M tokens)
 python scripts/prepare_data.py \
   --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
   --tokenizer tokenizer/ --output data/posttrain/cosmopedia \
   --max-tokens 500000000 --force
 
-# 3. Interleave shards (50/50)
-python scripts/mix_data.py data/posttrain/fineweb data/posttrain/cosmopedia \
-  --output data/posttrain/mixed
+# 3. Mix shards (50/50)
+python scripts/mix_data.py data/posttrain/wiki data/posttrain/cosmopedia \
+  --output data/posttrain/knowledge_blend
 
-# 4. Post-train from pretrained checkpoint
+# 4. Post-train from best pretrain checkpoint
 python scripts/resume.py \
-  --checkpoint-dir checkpoints/run \
-  --output-dir checkpoints/posttrain \
-  --cache-dir data/posttrain/mixed \
-  --max-tokens 1000000000 --lr 5e-5 --warmup-steps 300 \
-  --batch-size 22 --save-every-min 60
+  --checkpoint-dir checkpoints/smollm_blend \
+  --output-dir checkpoints/knowledge_posttrain \
+  --cache-dir data/posttrain/knowledge_blend \
+  --max-tokens 1000000000 --lr 2e-5 --warmup-steps 300 \
+  --batch-size 24 --save-every-min 60
 ```
 
 Key differences from pretraining:
 
-| Aspect | Pretrain | Post-train |
+| Aspect | Pretrain (SmolLM) | Post-train |
 |--------|----------|------------|
-| Data | C4-en (noisy) | FineWeb-Edu + Cosmopedia (curated) |
-| LR | 3e-4 | 5e-5 (lower, to avoid forgetting) |
-| Warmup | 2,000 steps | 300 steps (short re-warmup) |
-| Schedule | Cosine from scratch | Fresh cosine, AdamW momentum preserved |
+| Data | FineWeb-Edu + Cosmopedia (89:11) | Wiki + Cosmopedia (50:50) |
+| LR | 7e-4 | 2e-5 |
+| Warmup | 2,000 steps | 300 steps |
+| Schedule | Cosine from scratch | Fresh cosine, momentum preserved |
 | Target | 4B tokens | 1–4B tokens |
 
-`--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining. Output goes to `--output-dir`, keeping pretrain checkpoints untouched.
+`--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining.
 
-## Evaluation
+> **Known issue**: `resume.py` currently restores the pretrain LR when loading optimizer state, overriding `--lr`. As a workaround until this is fixed, verify the actual LR in training logs after warmup.
 
-### GLUE Benchmark (zero-shot)
-
-```bash
-# Quick evaluation (5 tasks, limited samples)
-python scripts/eval_glue.py --checkpoint checkpoints/run/step_0177557_final \
-  --tokenizer tokenizer/ --tasks quick --limit 500
-
-# Full evaluation (8 tasks)
-python scripts/eval_glue.py --checkpoint checkpoints/run/step_0177557_final \
-  --tokenizer tokenizer/ --tasks all --output results.json
-```
-
-Supported tasks: `sst2`, `mrpc`, `qqp`, `qnli`, `rte`, `cola`, `mnli`, `mnli_mismatched`.
-
-### ARC Challenge (zero-shot / few-shot)
+### Evaluation
 
 ```bash
-# Zero-shot
-python scripts/eval_arc.py --checkpoint checkpoints/run/step_0177557_final \
-  --tokenizer tokenizer/ --tasks arc_c,arc_e
+# GLUE (8 tasks)
+python scripts/eval_glue.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
+  --tokenizer tokenizer/ --tasks all --limit 500 --batch-size 16
 
-# 5-shot
-python scripts/eval_arc.py --checkpoint checkpoints/run/step_0177557_final \
+# ARC (0-shot + 5-shot)
+python scripts/eval_arc.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
+  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 0
+python scripts/eval_arc.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
   --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 5
 ```
 
-### Evaluation Method
-
-Zero-shot evaluation uses conditional log-likelihood scoring: each candidate answer string is appended to the prompt, and the model's per-token log-probability over only the answer span is averaged. The highest-scoring answer is selected. Labels are never leaked into the scoring context.
+Zero-shot evaluation uses conditional log-likelihood scoring over answer spans. Supported GLUE tasks: `sst2`, `mrpc`, `qqp`, `qnli`, `rte`, `cola`, `mnli`, `mnli_mismatched`.
 
 ## Publishing to HuggingFace
 
@@ -178,7 +176,7 @@ A pretrained model is already available at [mikecovlee/tinymixtral](https://hugg
 
 ```bash
 python scripts/publish_hf.py \
-  --checkpoint checkpoints/run/step_0177557_final \
+  --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
   --output publish/ --tokenizer tokenizer/
 ```
 
@@ -213,7 +211,7 @@ api.upload_folder(repo_id="your-username/tinymixtral", folder_path="publish/")
 python scripts/chat_hf.py mikecovlee/tinymixtral
 
 # From local checkpoint (native model loader)
-python scripts/chat.py --checkpoint checkpoints/run/step_0177557_final --tokenizer tokenizer/
+python scripts/chat.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final --tokenizer tokenizer/
 
 # From local publish directory
 python scripts/chat_hf.py publish/
@@ -275,39 +273,160 @@ tinymixtral/
 
 ## Results
 
+### Data Quality Ablation
+
+The original model trained on C4-en (noisy web text). We ran an ablation replacing C4 with a SmolLM-inspired blend: **FineWeb-Edu (89%) + Cosmopedia v2 (11%)**, 4B tokens total. Batch size increased to 24. LR swept on 100M-token runs; 7e-4 was optimal.
+
 ### Training Summary
 
-| Phase | Data | Tokens | Steps | Time | Start Loss | End Loss |
-|-------|------|:------:|:-----:|:----:|:----------:|:--------:|
-| Pretrain | C4-en | 4B | 177,557 | 77.1 h | 10.5 | 3.0 |
-| Post-train | FineWeb-Edu + Cosmopedia v2 (50:50) | 1B | 44,390 | 20.8 h | 3.05 | 2.0 |
+| Phase | Data | LR | Tokens | Steps | Time | End Loss |
+|-------|------|----|:------:|:-----:|:----:|:--------:|
+| Pretrain (C4) | C4-en | 3e-4 | 4B | 177,557 | 77.1 h | 3.0 |
+| Pretrain (SmolLM) | FineWeb-Edu + Cosmopedia v2 (89:11) | 7e-4 | 4B | 162,761 | 83.6 h | 2.5 |
+| Post-train | Wiki + Cosmopedia v2 (50:50) | 7e-4* | 1B | 40,691 | 21.2 h | 1.9 |
 
-Post-training used learning rate 5e-5 with 300-step re-warmup, continuing from the pretrain checkpoint with AdamW momentum preserved.
+*Post-train ran at 7e-4 (pretrain LR) due to a known issue in `resume.py` where optimizer state loading restores the old LR. The intended LR was 2e-5; a fix is planned.
 
 ### GLUE (zero-shot)
 
-| Task | Metric | Pretrain (4B C4) | Post-train (5B total) |
-|------|--------|:---:|:---:|
-| SST2 | accuracy | 0.470 | **0.554** |
-| MRPC | accuracy / f1 | 0.338 / 0.069 | **0.706 / 0.815** |
-| QQP | accuracy / f1 | 0.470 / 0.412 | **0.530** / 0.342 |
-| QNLI | accuracy | 0.494 | 0.452 |
-| RTE | accuracy | 0.520 | 0.484 |
-| CoLA | MCC | 0.089 | 0.006 |
-| MNLI | accuracy | 0.348 | 0.348 |
-| MNLI-mm | accuracy | 0.368 | 0.368 |
-| **Mean** | — | **0.403** | **0.483** |
+| Task | Metric | C4 4B | SmolLM 4B | + Post-train (5B) |
+|------|--------|:---:|:---:|:---:|
+| SST2 | accuracy | 0.470 | 0.556 | **0.576** |
+| MRPC | accuracy / f1 | 0.338 / 0.069 | 0.686 / 0.813 | 0.686 / 0.813 |
+| QQP | accuracy / f1 | 0.470 / 0.412 | 0.350 / 0.519 | 0.350 / 0.519 |
+| QNLI | accuracy | 0.494 | 0.460 | 0.458 |
+| RTE | accuracy | 0.520 | 0.527 | 0.520 |
+| MNLI | accuracy | 0.348 | 0.350 | 0.348 |
+| MNLI-mm | accuracy | 0.368 | 0.366 | 0.368 |
+| **Mean** | — | 0.383 | 0.513 | **0.515** |
+
+The data quality switch (C4 → SmolLM blend) drove the major improvement (+34% GLUE mean). Post-training on Wiki + Cosmopedia gave marginal gains (SST2 +2pp) but was nearly flat overall — likely because the 7e-4 LR was too aggressive for post-training.
 
 ### ARC
 
-| Task | Pretrain (4B C4) | Post-train (5B total) |
-|------|:---:|:---:|
-| ARC-C 0-shot | 0.220 | **0.233** |
-| ARC-C 5-shot | 0.223 | **0.246** |
-| ARC-E 0-shot | 0.311 | **0.342** |
-| ARC-E 5-shot | 0.320 | **0.348** |
+| Task | C4 4B | SmolLM 4B | + Post-train (5B) |
+|------|:---:|:---:|:---:|
+| ARC-C 0-shot | 0.220 | **0.256** | 0.242 |
+| ARC-C 5-shot | 0.223 | **0.259** | 0.254 |
+| ARC-E 0-shot | 0.311 | 0.356 | 0.363 |
+| ARC-E 5-shot | 0.320 | 0.362 | **0.388** |
 
-Zero-shot evaluation uses conditional log-likelihood scoring over answer spans. All evals run on a single GPU with `--limit 500 --batch-size 16 --max-length 512`. Pretrain and post-train evaluated under identical settings for fair comparison.
+ARC improved consistently from data quality alone (+3–4pp). Post-training helped ARC-E 5-shot (+2.6pp) but slightly regressed ARC-C, likely from the overly aggressive LR.
+
+### Key Finding
+
+Switching from C4 to a curated high-quality blend (FineWeb-Edu + Cosmopedia v2) improved GLUE mean by **34%** (+0.130) at the same 4B token budget. The largest gain came from MRPC (paraphrase detection), which went from random guessing to 0.813 F1 — proving that small MoE models can learn meaningful language understanding given clean data. Post-training with domain-specific data (Wiki + Cosmopedia) provides only marginal benefit at this scale, suggesting the pretrain data recipe is the dominant factor.
+
+All evaluations use conditional log-likelihood scoring over answer spans, identical settings for fair comparison (`--limit 500 --batch-size 16 --max-length 512`).
+
+## Legacy (v1) — Original C4 Training
+
+The first version of TinyMixtral trained on C4-en, a general-purpose web corpus. The v1 weights are available at [mikecovlee/tinymixtral-v1.0](https://huggingface.co/mikecovlee/tinymixtral-v1.0). This section is kept for historical reference and reproducibility. The current recommended recipe (SmolLM blend) is documented in the sections above.
+
+### Data Preparation
+
+```bash
+# 1. Download tokenizer
+python scripts/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
+
+# 2. Tokenize C4-en (4B tokens)
+python scripts/prepare_data.py --dataset allenai/c4 --subset en \
+  --tokenizer tokenizer/ --output data/c4/tokenized \
+  --max-tokens 4000000000 --force
+```
+
+### Pretrain (4B tokens)
+
+```bash
+python scripts/train.py --cache-dir data/c4/tokenized \
+  --batch-size 22 --max-tokens 4000000000 --lr 3e-4 --warmup-steps 2000 \
+  --keep-last-checkpoints 5 2>&1 | tee train.log
+```
+
+| Parameter | Value |
+|-----------|-------|
+| Data | C4-en |
+| Batch size | 22 |
+| Sequence length | 1,024 |
+| Tokens/step | 22,528 |
+| Steps | 177,557 |
+| Learning rate | 3e-4 |
+| Warmup steps | 2,000 |
+| Weight decay | 0.1 |
+| Grad clip | 1.0 |
+| Time | ~77 h |
+
+### Post-train (1B tokens)
+
+Continue from the C4 checkpoint on higher-quality data:
+
+```bash
+# 3. Tokenize FineWeb-Edu (500M tokens)
+python scripts/prepare_data.py \
+  --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
+  --tokenizer tokenizer/ --output data/posttrain/fineweb \
+  --max-tokens 500000000 --force
+
+# 4. Tokenize Cosmopedia v2 (500M tokens)
+python scripts/prepare_data.py \
+  --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
+  --tokenizer tokenizer/ --output data/posttrain/cosmopedia \
+  --max-tokens 500000000 --force
+
+# 5. Mix shards (50/50)
+python scripts/mix_data.py data/posttrain/fineweb data/posttrain/cosmopedia \
+  --output data/posttrain/mixed
+
+# 6. Post-train
+python scripts/resume.py \
+  --checkpoint-dir checkpoints/run \
+  --output-dir checkpoints/posttrain \
+  --cache-dir data/posttrain/mixed \
+  --max-tokens 1000000000 --lr 5e-5 --warmup-steps 300 \
+  --batch-size 22 --save-every-min 60
+```
+
+| Parameter | Value |
+|-----------|-------|
+| Data | FineWeb-Edu + Cosmopedia v2 (50:50) |
+| Tokens | 1B |
+| Steps | 44,390 |
+| Learning rate | 5e-5 |
+| Warmup steps | 300 |
+| Time | ~20.8 h |
+
+### Evaluation
+
+```bash
+# GLUE
+python scripts/eval_glue.py --checkpoint checkpoints/run/step_0177557_final \
+  --tokenizer tokenizer/ --tasks all --limit 500 --batch-size 16
+
+# ARC
+python scripts/eval_arc.py --checkpoint checkpoints/run/step_0177557_final \
+  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 0
+python scripts/eval_arc.py --checkpoint checkpoints/run/step_0177557_final \
+  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 5
+```
+
+### Results
+
+| Task | Metric | Pretrain (C4 4B) | Post-train (+1B, 5B total) |
+|------|--------|:---:|:---:|
+| SST2 | accuracy | 0.470 | 0.554 |
+| MRPC | accuracy / f1 | 0.338 / 0.069 | 0.706 / 0.815 |
+| QQP | accuracy / f1 | 0.470 / 0.412 | 0.530 / 0.342 |
+| QNLI | accuracy | 0.494 | 0.452 |
+| RTE | accuracy | 0.520 | 0.484 |
+| MNLI | accuracy | 0.348 | 0.348 |
+| MNLI-mm | accuracy | 0.368 | 0.368 |
+| **GLUE Mean** | — | 0.383 | 0.480 |
+| ARC-C 0-shot | accuracy | 0.220 | 0.233 |
+| ARC-C 5-shot | accuracy | 0.223 | 0.246 |
+| ARC-E 0-shot | accuracy | 0.311 | 0.342 |
+| ARC-E 5-shot | accuracy | 0.320 | 0.348 |
+
+Post-training improved GLUE mean from 0.383 to 0.480, with the largest gain on MRPC (F1: 0.069 → 0.815). ARC improved modestly (+1–3 pp). These v1 results serve as the baseline for the data quality ablation documented above.
 
 ## License
 

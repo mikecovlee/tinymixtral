@@ -23,6 +23,7 @@ tokenizer/
 # Eval outputs (source code in evals/ is tracked)
 evals/run/
 evals/baseline/
+results*.json
 
 # Logs
 *.log
