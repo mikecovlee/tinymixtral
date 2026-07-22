@@ -133,7 +133,10 @@ def main():
     check_checkpoint_disk_space(model, output_dir, args.keep_last_checkpoints)
 
     if is_posttrain:
-        # Post-training: 保留 optimizer 动量，重建 scheduler 从新 warmup 开始
+        # Post-training: 保留 optimizer 动量，用 CLI --lr 覆盖 checkpoint 中的旧 LR
+        for pg in opt.param_groups:
+            pg["lr"] = args.lr
+            pg["initial_lr"] = args.lr
         sched = make_cosine_schedule(opt, warmup, total_steps)
         print(f"Starting fresh cosine schedule: warmup={warmup} total={total_steps}", flush=True)
     else:

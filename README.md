@@ -150,9 +150,7 @@ Key differences from pretraining:
 | Schedule | Cosine from scratch | Fresh cosine, momentum preserved |
 | Target | 4B tokens | 1–4B tokens |
 
-`--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining.
-
-> **Known issue**: `resume.py` currently restores the pretrain LR when loading optimizer state, overriding `--lr`. As a workaround until this is fixed, verify the actual LR in training logs after warmup.
+`--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining. The `--lr` flag correctly overrides the checkpoint's saved LR in post-training mode.
 
 ### Evaluation
 
@@ -283,9 +281,7 @@ The original model trained on C4-en (noisy web text). We ran an ablation replaci
 |-------|------|----|:------:|:-----:|:----:|:--------:|
 | Pretrain (C4) | C4-en | 3e-4 | 4B | 177,557 | 77.1 h | 3.0 |
 | Pretrain (SmolLM) | FineWeb-Edu + Cosmopedia v2 (89:11) | 7e-4 | 4B | 162,761 | 83.6 h | 2.5 |
-| Post-train | Wiki + Cosmopedia v2 (50:50) | 7e-4* | 1B | 40,691 | 21.2 h | 1.9 |
-
-*Post-train ran at 7e-4 (pretrain LR) due to a known issue in `resume.py` where optimizer state loading restores the old LR. The intended LR was 2e-5; a fix is planned.
+| Post-train | Wiki + Cosmopedia v2 (50:50) | 2e-5 | 1B | 40,691 | 21.2 h | 1.9 |
 
 ### GLUE (zero-shot)
 
