@@ -281,37 +281,37 @@ The original model trained on C4-en (noisy web text). We ran an ablation replaci
 |-------|------|----|:------:|:-----:|:----:|:--------:|
 | Pretrain (C4) | C4-en | 3e-4 | 4B | 177,557 | 77.1 h | 3.0 |
 | Pretrain (SmolLM) | FineWeb-Edu + Cosmopedia v2 (89:11) | 7e-4 | 4B | 162,761 | 83.6 h | 2.5 |
-| Post-train | Wiki + Cosmopedia v2 (50:50) | 2e-5 | 1B | 40,691 | 21.2 h | 1.9 |
+| Post-train | Wiki + Cosmopedia v2 (50:50) | 2e-5 | 1B | 40,691 | 20.5 h | 2.5 |
 
 ### GLUE (zero-shot)
 
 | Task | Metric | C4 4B | SmolLM 4B | + Post-train (5B) |
 |------|--------|:---:|:---:|:---:|
-| SST2 | accuracy | 0.470 | 0.556 | **0.576** |
+| SST2 | accuracy | 0.470 | 0.556 | **0.568** |
 | MRPC | accuracy / f1 | 0.338 / 0.069 | 0.686 / 0.813 | 0.686 / 0.813 |
 | QQP | accuracy / f1 | 0.470 / 0.412 | 0.350 / 0.519 | 0.350 / 0.519 |
 | QNLI | accuracy | 0.494 | 0.460 | 0.458 |
-| RTE | accuracy | 0.520 | 0.527 | 0.520 |
-| MNLI | accuracy | 0.348 | 0.350 | 0.348 |
-| MNLI-mm | accuracy | 0.368 | 0.366 | 0.368 |
+| RTE | accuracy | 0.520 | 0.527 | **0.534** |
+| MNLI | accuracy | 0.348 | 0.350 | **0.352** |
+| MNLI-mm | accuracy | 0.368 | 0.366 | 0.364 |
 | **Mean** | — | 0.383 | 0.513 | **0.515** |
 
-The data quality switch (C4 → SmolLM blend) drove the major improvement (+34% GLUE mean). Post-training on Wiki + Cosmopedia gave marginal gains (SST2 +2pp) but was nearly flat overall — likely because the 7e-4 LR was too aggressive for post-training.
+The data quality switch (C4 → SmolLM blend) drove the major improvement (+34% GLUE mean). Post-training on Wiki + Cosmopedia produced neutral results overall (GLUE mean +0.002), suggesting that at 432M scale, 4B tokens of high-quality pretrain data already saturates the model's capacity.
 
 ### ARC
 
 | Task | C4 4B | SmolLM 4B | + Post-train (5B) |
 |------|:---:|:---:|:---:|
-| ARC-C 0-shot | 0.220 | **0.256** | 0.242 |
+| ARC-C 0-shot | 0.220 | **0.256** | 0.249 |
 | ARC-C 5-shot | 0.223 | **0.259** | 0.254 |
-| ARC-E 0-shot | 0.311 | 0.356 | 0.363 |
-| ARC-E 5-shot | 0.320 | 0.362 | **0.388** |
+| ARC-E 0-shot | 0.311 | 0.356 | **0.365** |
+| ARC-E 5-shot | 0.320 | 0.362 | **0.368** |
 
-ARC improved consistently from data quality alone (+3–4pp). Post-training helped ARC-E 5-shot (+2.6pp) but slightly regressed ARC-C, likely from the overly aggressive LR.
+ARC improved consistently from data quality alone (+3–4pp). Post-training nudged ARC-E slightly higher but regressed ARC-C marginally — net neutral.
 
 ### Key Finding
 
-Switching from C4 to a curated high-quality blend (FineWeb-Edu + Cosmopedia v2) improved GLUE mean by **34%** (+0.130) at the same 4B token budget. The largest gain came from MRPC (paraphrase detection), which went from random guessing to 0.813 F1 — proving that small MoE models can learn meaningful language understanding given clean data. Post-training with domain-specific data (Wiki + Cosmopedia) provides only marginal benefit at this scale, suggesting the pretrain data recipe is the dominant factor.
+Switching from C4 to a curated high-quality blend (FineWeb-Edu + Cosmopedia v2) improved GLUE mean by **34%** (+0.130) at the same 4B token budget. The largest gain came from MRPC (paraphrase detection), which went from random guessing to 0.813 F1 — proving that small MoE models can learn meaningful language understanding given clean data. Post-training with domain-specific data provides negligible additional benefit at this scale, indicating that the pretrain data recipe is the dominant factor for model quality.
 
 All evaluations use conditional log-likelihood scoring over answer spans, identical settings for fair comparison (`--limit 500 --batch-size 16 --max-length 512`).
 
