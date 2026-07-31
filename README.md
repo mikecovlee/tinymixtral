@@ -254,8 +254,6 @@ tinymixtral/
 │   └── scripts/                    # v2 training scripts (WSD schedule, BF16AdamW)
 ├── configs/                        # Config templates
 ├── requirements.txt                # Python dependencies
-├── start.sh                        # Training launch script
-├── resume.sh                       # Resume launch script
 ├── LICENSE                         # MIT
 └── README.md
 ```
