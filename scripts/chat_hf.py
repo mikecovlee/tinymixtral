@@ -59,7 +59,7 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, trust_remote_code=True, dtype=torch.bfloat16,
+        model_path, trust_remote_code=True, torch_dtype=torch.bfloat16,
     )
     model.eval()
     device = "cuda" if torch.cuda.is_available() else "cpu"

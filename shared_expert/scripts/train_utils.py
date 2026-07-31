@@ -322,7 +322,7 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                     raise RuntimeError(f"No shard contains at least {chunk} tokens")
                 continue
 
-            batch = batch.view(bs, seq + 1).to("cuda")
+            batch = batch.view(bs, seq + 1).to("cuda", non_blocking=True)
             ptr += chunk
             total_tok += bs * seq
 
@@ -338,7 +338,7 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                 raise FloatingPointError(f"Non-finite gradient norm at step {step + 1}: {grad_norm.item()}")
             opt.step()
             sched.step()
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=True)
             step += 1
 
             if step % log_every == 0:
