@@ -12,15 +12,81 @@ import torch
 # 共享工具
 # ============================================================
 
-def make_adamw(model, lr, weight_decay, betas=(0.9, 0.95)):
-    """构建 AdamW：矩阵权重衰减，RMSNorm 等 1D 参数不衰减。"""
+class BF16AdamW(torch.optim.AdamW):
+    """AdamW that stores optimizer states in bfloat16 to save VRAM.
+
+    States (exp_avg, exp_avg_sq) are kept in bf16 between steps and
+    cast to fp32 only during the update computation, saving ~50% of
+    optimizer state memory at the cost of minor precision loss.
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("foreach", False)
+        kwargs.setdefault("fused", False)
+        super().__init__(*args, **kwargs)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            eps = group["eps"]
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = p.grad.float()
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros(p.shape, dtype=torch.bfloat16, device=p.device)
+                    state["exp_avg_sq"] = torch.zeros(p.shape, dtype=torch.bfloat16, device=p.device)
+
+                state["step"] += 1
+                t = state["step"]
+
+                exp_avg = state["exp_avg"].float()
+                exp_avg_sq = state["exp_avg_sq"].float()
+
+                exp_avg.lerp_(grad, 1 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                bias_correction1 = 1 - beta1 ** t
+                bias_correction2 = 1 - beta2 ** t
+                step_size = lr / bias_correction1
+                denom = (exp_avg_sq.sqrt() / (bias_correction2 ** 0.5)).add_(eps)
+
+                if wd > 0:
+                    p.mul_(1 - lr * wd)
+                p.addcdiv_(exp_avg, denom, value=-step_size)
+
+                state["exp_avg"] = exp_avg.to(torch.bfloat16)
+                state["exp_avg_sq"] = exp_avg_sq.to(torch.bfloat16)
+
+        return loss
+
+
+def make_adamw(model, lr, weight_decay, betas=(0.9, 0.95), bf16_states=False):
+    """构建 AdamW：矩阵权重衰减，RMSNorm 等 1D 参数不衰减。
+
+    bf16_states=True 时使用 BF16AdamW，优化器状态存储为 bf16，
+    节省约 50% 优化器显存。
+    """
     decay = []
     no_decay = []
     for parameter in model.parameters():
         if not parameter.requires_grad:
             continue
         (decay if parameter.ndim >= 2 else no_decay).append(parameter)
-    return torch.optim.AdamW(
+    cls = BF16AdamW if bf16_states else torch.optim.AdamW
+    return cls(
         [
             {"params": decay, "weight_decay": weight_decay},
             {"params": no_decay, "weight_decay": 0.0},
@@ -147,6 +213,7 @@ def make_wsd_schedule(opt, warmup_steps, total_steps, decay_ratio=0.1):
         raise ValueError("total_steps must be positive")
     warmup_steps = min(max(warmup_steps, 0), max(total_steps - 2, 0))
     decay_steps = max(1, int(total_steps * decay_ratio))
+    # ensure there's at least 1 stable step
     decay_start = max(warmup_steps + 1, total_steps - decay_steps)
 
     def lr_lambda(s):
@@ -166,10 +233,11 @@ def make_wsd_schedule(opt, warmup_steps, total_steps, decay_ratio=0.1):
 
 def run_cpu_eval(checkpoint_path, eval_dir):
     """子进程 CPU GLUE eval。"""
-    script = Path(__file__).parent / "eval_glue.py"
+    project_root = Path(__file__).parent.parent.parent
+    script = project_root / "scripts" / "eval_glue.py"
     output = Path(eval_dir) / "summary.json"
     output.parent.mkdir(parents=True, exist_ok=True)
-    tokenizer_path = Path(__file__).parent.parent / "tokenizer"
+    tokenizer_path = project_root / "tokenizer"
     # 删除旧结果，防止子进程失败时误读
     if output.exists():
         output.unlink()

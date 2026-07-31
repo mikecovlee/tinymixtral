@@ -10,8 +10,8 @@ import torch
 from model.config import TinyMixtralConfig
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
-    check_checkpoint_disk_space, final_save, make_adamw, make_cosine_schedule,
-    make_wsd_schedule, training_loop,
+    check_checkpoint_disk_space, final_save, make_adamw,
+    make_cosine_schedule, make_wsd_schedule, training_loop,
 )
 
 
@@ -34,6 +34,8 @@ def main():
     p.add_argument("--log-every", type=int, default=100)
     p.add_argument("--schedule", default="cosine", choices=["cosine", "wsd"],
                    help="LR schedule: cosine or wsd (Warmup-Stable-Decay)")
+    p.add_argument("--bf16-optim", action="store_true",
+                   help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
     p.add_argument("--eval-on-save", action="store_true",
                    help="每次保存后同步执行 CPU GLUE 评测")
     args = p.parse_args()
@@ -66,7 +68,8 @@ def main():
     model.gradient_checkpointing_enable()
     model = model.to("cuda").to(torch.bfloat16)
     nM = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"Model: {cfg.hidden_size}d/{cfg.num_hidden_layers}L/{cfg.num_local_experts}E "
+    print(f"Model: {cfg.hidden_size}d/{cfg.num_hidden_layers}L/"
+          f"{cfg.num_shared_experts}S+{cfg.num_routed_experts}R "
           f"GQA{cfg.num_attention_heads}h/{cfg.num_key_value_heads}kv {nM:.0f}M params", flush=True)
     check_checkpoint_disk_space(model, args.output_dir, args.keep_last_checkpoints)
 
@@ -80,7 +83,7 @@ def main():
         p.error("training targets must be positive")
     target_tokens = total_steps * tokens_per_step
 
-    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd)
+    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd, bf16_states=args.bf16_optim)
     effective_warmup = min(args.warmup_steps, max(total_steps - 1, 0))
     make_schedule = make_wsd_schedule if args.schedule == "wsd" else make_cosine_schedule
     sched = make_schedule(opt, effective_warmup, total_steps)

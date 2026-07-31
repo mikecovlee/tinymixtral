@@ -142,13 +142,13 @@ python scripts/resume.py \
 
 Key differences from pretraining:
 
-| Aspect | Pretrain (SmolLM) | Post-train |
+| Aspect | Pretrain | Post-train |
 |--------|----------|------------|
 | Data | FineWeb-Edu + Cosmopedia (89:11) | Wiki + Cosmopedia (50:50) |
 | LR | 7e-4 | 2e-5 |
 | Warmup | 2,000 steps | 300 steps |
 | Schedule | Cosine from scratch | Fresh cosine, momentum preserved |
-| Target | 4B tokens | 1–4B tokens |
+| Target | 4B tokens | 1B tokens |
 
 `--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining. The `--lr` flag correctly overrides the checkpoint's saved LR in post-training mode.
 
@@ -245,6 +245,10 @@ tinymixtral/
 │   ├── mix_data.py                 # Interleave shards from multiple datasets
 │   ├── benchmark.py                # GPU memory/throughput profiler
 │   └── search.py                   # Hyperparameter search
+├── shared_expert/                  # Architecture ablation: shared expert variant
+│   ├── model/                      # v2 model code (1 shared + 6 routed experts)
+│   ├── hf/                         # v2 HF compatibility layer
+│   └── scripts/                    # v2 training scripts (WSD schedule, BF16AdamW)
 ├── configs/                        # Config templates
 ├── requirements.txt                # Python dependencies
 ├── start.sh                        # Training launch script
@@ -296,7 +300,7 @@ The original model trained on C4-en (noisy web text). We ran an ablation replaci
 | MNLI-mm | accuracy | 0.368 | 0.366 | 0.364 |
 | **Mean** | — | 0.383 | 0.513 | **0.515** |
 
-The data quality switch (C4 → SmolLM blend) drove the major improvement (+34% GLUE mean). Post-training on Wiki + Cosmopedia produced neutral results overall (GLUE mean +0.002), suggesting that at 432M scale, 4B tokens of high-quality pretrain data already saturates the model's capacity.
+The data quality switch (C4 → SmolLM blend) drove the major improvement (+34% GLUE mean). Post-training on Wiki + Cosmopedia produced marginal gains (GLUE mean +0.002), suggesting that at 432M scale, 4B tokens of high-quality pretrain data already saturates the model's capacity.
 
 ### ARC
 
@@ -314,6 +318,73 @@ ARC improved consistently from data quality alone (+3–4pp). Post-training nudg
 Switching from C4 to a curated high-quality blend (FineWeb-Edu + Cosmopedia v2) improved GLUE mean by **34%** (+0.130) at the same 4B token budget. The largest gain came from MRPC (paraphrase detection), which went from random guessing to 0.813 F1 — proving that small MoE models can learn meaningful language understanding given clean data. Post-training with domain-specific data provides negligible additional benefit at this scale, indicating that the pretrain data recipe is the dominant factor for model quality.
 
 All evaluations use conditional log-likelihood scoring over answer spans, identical settings for fair comparison (`--limit 500 --batch-size 16 --max-length 512`).
+
+---
+
+## Ablation: Shared Expert Architecture
+
+The `shared_expert/` directory contains a variant architecture experiment (v2) that adds a DeepSeek-style shared expert to the MoE layer. This section documents the experiment for reproducibility.
+
+### Architecture Changes (vs baseline)
+
+| Parameter | Baseline (v1.1) | Shared Expert (v2) |
+|-----------|:---:|:---:|
+| Attention | GQA 14Q / 2KV (7:1) | GQA 16Q / 4KV (4:1) |
+| Head dim | 64 | 56 |
+| Experts | 6 routed (top-2) | 1 shared + 6 routed (top-2) |
+| LR schedule | Cosine | WSD (Warmup-Stable-Decay) |
+| Batch size | 24 | 22 |
+| **Total params** | **~432M** | **~498M** |
+| **Active params** | **~176M** | **~241M** |
+
+The shared expert is always active (no routing), providing general-purpose features. Routed experts specialize via top-2 gating. Output is the sum of both.
+
+### Training
+
+```bash
+# Uses the same tokenized data as baseline
+python shared_expert/scripts/train.py --cache-dir data/pretrain/smollm_blend \
+  --output-dir checkpoints/v2 --batch-size 22 \
+  --max-tokens 4000000000 --lr 7e-4 --schedule wsd \
+  --warmup-steps 2000 --save-every-min 120
+
+# Post-train
+python shared_expert/scripts/resume.py --checkpoint-dir checkpoints/v2 \
+  --output-dir checkpoints/v2_posttrain \
+  --cache-dir data/posttrain2/knowledge_blend \
+  --max-tokens 1000000000 --lr 2e-5 --warmup-steps 300 \
+  --batch-size 22 --schedule wsd --save-every-min 60
+```
+
+### Results
+
+| Task | Baseline (v1.1) | Shared Expert pretrain | Shared Expert post-train |
+|------|:---:|:---:|:---:|
+| SST2 | 0.568 | 0.518 | **0.586** |
+| MRPC F1 | **0.813** | 0.811 | 0.809 |
+| QQP F1 | 0.519 | 0.519 | 0.519 |
+| QNLI | 0.458 | 0.458 | 0.458 |
+| RTE | **0.534** | 0.520 | 0.520 |
+| MNLI | **0.352** | 0.348 | 0.348 |
+| MNLI-mm | 0.364 | 0.368 | **0.368** |
+| **GLUE Mean** | 0.513 | 0.505 | **0.515** |
+| ARC-C 0-shot | 0.249 | **0.265** | 0.264 |
+| ARC-C 5-shot | 0.254 | 0.256 | **0.259** |
+| ARC-E 0-shot | 0.365 | 0.384 | **0.388** |
+| ARC-E 5-shot | 0.368 | 0.379 | **0.387** |
+
+### Conclusion
+
+The shared expert variant does **not** provide substantial improvement over the baseline at this scale:
+
+- GLUE mean is within evaluation noise (0.515 vs 0.513, +0.002)
+- ARC improves consistently (+1–2pp), suggesting better knowledge capacity
+- SST2 improves after post-train (+6.8pp vs baseline post-train), but other GLUE tasks are flat or slightly worse
+- Total params increase 15% (432M→498M) for marginal gains
+
+At ~241M active parameters, the MoE routing overhead and representational fragmentation outweigh the knowledge capacity benefit. The shared expert design is more likely to pay off at 1B+ active params (cf. DeepSeek, Mixtral). The baseline v1.1 architecture remains the recommended model.
+
+---
 
 ## Legacy (v1) — Original C4 Training
 
@@ -390,20 +461,6 @@ python scripts/resume.py \
 | Learning rate | 5e-5 |
 | Warmup steps | 300 |
 | Time | ~20.8 h |
-
-### Evaluation
-
-```bash
-# GLUE
-python scripts/eval_glue.py --checkpoint checkpoints/run/step_0177557_final \
-  --tokenizer tokenizer/ --tasks all --limit 500 --batch-size 16
-
-# ARC
-python scripts/eval_arc.py --checkpoint checkpoints/run/step_0177557_final \
-  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 0
-python scripts/eval_arc.py --checkpoint checkpoints/run/step_0177557_final \
-  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 5
-```
 
 ### Results
 
