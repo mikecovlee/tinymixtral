@@ -79,7 +79,7 @@ python scripts/train.py --cache-dir data/pretrain/smollm_blend \
 ## Training Details
 
 - **Precision**: bf16 (model + autocast forward/backward), fp32 optimizer states
-- **Optimizer**: AdamW (β=0.9,0.95, wd=0.1), weight decay only on ≥2D parameters
+- **Optimizer**: AdamW (β=0.9,0.95, wd=0.1), weight decay only on ≥2D parameters; `--bf16-optim` stores moments in bf16
 - **LR schedule**: Cosine decay with linear warmup (warmup_steps=2000); WSD also available via `--schedule wsd`
 - **Gradient clipping**: 1.0
 - **Batch**: 24 × 1024 = 24,576 tokens/step
@@ -264,11 +264,11 @@ tinymixtral/
 
 2. **Pre-tokenized shards** — Data is tokenized once to disk, eliminating CPU bottleneck during training. Shards cycle round-robin; each shard is loaded on demand.
 
-3. **bf16 throughout** — Model parameters, AdamW first/second moments, and forward/backward passes all use bf16.
+3. **bf16 model, flexible optimizer** — Model parameters and forward/backward passes use bf16. Optimizer states default to fp32; `--bf16-optim` stores them in bf16 (~50% optimizer VRAM savings).
 
 4. **Auxiliary loss (Mixtral-style)** — `L_aux = N × sum_i(f_i × P_i)` where `f_i` (fraction of routed tokens) is detached and `P_i` (mean router softmax) retains gradient. Aux losses are averaged across layers before applying the coefficient.
 
-5. **GQA with SDPA** — 14 query heads share 2 key/value heads (7:1 ratio). Causal and padding masks are merged into a 4D boolean mask for `scaled_dot_product_attention` (PyTorch 2.x disallows simultaneous `attn_mask` + `is_causal`).
+5. **GQA with SDPA** — 14 query heads share 2 key/value heads (7:1 ratio). Training path uses `enable_gqa=True` with `is_causal=True` (no KV expansion). When a padding mask is present (eval/inference), KV heads are explicitly expanded and a 4D boolean mask is constructed.
 
 6. **Atomic checkpoint saves** — Checkpoints are written to a temporary directory and atomically renamed, preventing corruption from interrupted saves.
 

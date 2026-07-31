@@ -5,7 +5,7 @@
 
 架构：
 - decoder-only, RMSNorm, RoPE, GQA
-- Mixtral-style sparse MoE FFN (top-k routing, SwiGLU experts)
+- DeepSeek-style sparse MoE FFN (shared + top-k routed, SwiGLU experts)
 - 支持 activation checkpointing, FlashAttention (sdpa)
 """
 
