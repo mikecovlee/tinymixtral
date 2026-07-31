@@ -2,7 +2,7 @@
 # Open-source under the MIT License. See LICENSE for details.
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn as nn
