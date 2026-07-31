@@ -34,6 +34,8 @@ def main():
     p.add_argument("--log-every", type=int, default=100)
     p.add_argument("--schedule", default="cosine", choices=["cosine", "wsd"],
                    help="LR schedule: cosine or wsd (Warmup-Stable-Decay)")
+    p.add_argument("--bf16-optim", action="store_true",
+                   help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
     p.add_argument("--eval-on-save", action="store_true",
                    help="每次保存后同步执行 CPU GLUE 评测")
     args = p.parse_args()
@@ -80,7 +82,7 @@ def main():
         p.error("training targets must be positive")
     target_tokens = total_steps * tokens_per_step
 
-    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd)
+    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd, bf16_states=args.bf16_optim)
     effective_warmup = min(args.warmup_steps, max(total_steps - 1, 0))
     make_schedule = make_wsd_schedule if args.schedule == "wsd" else make_cosine_schedule
     sched = make_schedule(opt, effective_warmup, total_steps)

@@ -110,27 +110,20 @@ class GQAAttention(nn.Module):
         k = self.k_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        # GQA: expand KV heads
-        k = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-        v = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-
         # RoPE
         if position_ids is None:
             position_ids = torch.arange(S, device=hidden_states.device).unsqueeze(0).expand(B, -1)
         q = self.rotary_emb(q, position_ids)
         k = self.rotary_emb(k, position_ids)
 
-        # FlashAttention via sdpa — 必须显式合并 causal + padding mask
-        # PyTorch 2.x 不允许 attn_mask 和 is_causal 同时设置
         if attention_mask is not None:
-            # attention_mask: [B, S] bool, True=valid token
-            # 构造 4D causal mask 并与 padding 合并
+            k_exp = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
+            v_exp = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
             causal = torch.tril(torch.ones(S, S, device=hidden_states.device, dtype=torch.bool))
-            # padding: [B, 1, 1, S] → 控制哪些 key 可见
-            pad_4d = attention_mask[:, None, None, :]  # [B, 1, 1, S]
-            combined = causal[None, None, :, :] & pad_4d  # [B, 1, S, S]
+            pad_4d = attention_mask[:, None, None, :]
+            combined = causal[None, None, :, :] & pad_4d
             attn_output = F.scaled_dot_product_attention(
-                q, k, v,
+                q, k_exp, v_exp,
                 attn_mask=combined,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
@@ -141,6 +134,7 @@ class GQAAttention(nn.Module):
                 attn_mask=None,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=True,
+                enable_gqa=True,
             )
 
         attn_output = attn_output.transpose(1, 2).reshape(B, S, -1)
@@ -199,55 +193,53 @@ class SparseMoE(nn.Module):
         """
         B, S, D = x.shape
         x_flat = x.view(-1, D)  # [B*S, D]
+        N = B * S
 
-        # Router logits
-        router_logits = self.router(x_flat)  # [B*S, num_experts]
+        router_logits = self.router(x_flat)  # [N, num_experts]
 
-        # Router jitter（仅训练时）
         if self.training and self.jitter_noise > 0:
             router_logits = router_logits * (1 + torch.randn_like(router_logits) * self.jitter_noise)
 
         routing_weights = F.softmax(router_logits.float(), dim=-1).to(x.dtype)
         routing_weights_topk, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-
-        # Normalize top-k weights
         routing_weights_topk = routing_weights_topk / routing_weights_topk.sum(dim=-1, keepdim=True)
 
-        # Auxiliary load balancing loss (Mixtral-style)
-        # L_aux = N * sum_i(f_i * P_i)
-        #   f_i = fraction of routing decisions to expert i
-        #   P_i = mean softmax probability for expert i
         aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         if self.training and self.aux_loss_coef > 0:
-            # f_i = fraction of routing decisions per expert (discrete top-k → detach)
             with torch.no_grad():
                 expert_mask = F.one_hot(selected_experts, num_classes=self.num_experts).float()
-                f_i = expert_mask.mean(dim=(0, 1))  # [num_experts], no grad
-            # P_i = mean router softmax probability (differentiable, router learns from this)
-            P_i = routing_weights.mean(dim=0)  # [num_experts], has grad
+                f_i = expert_mask.mean(dim=(0, 1))
+            P_i = routing_weights.mean(dim=0)
             aux_loss = (f_i.detach() * P_i).sum() * self.num_experts
 
-        # Compute expert outputs for selected experts
-        # For each token, compute only the selected top-k expert outputs
-        final_out = torch.zeros(B * S, D, device=x.device, dtype=x.dtype)
+        flat_experts = selected_experts.view(-1)
+        flat_weights = routing_weights_topk.view(-1)
+        flat_token_idx = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
 
-        for k in range(self.top_k):
-            expert_idx = selected_experts[:, k]  # [B*S]
-            weight = routing_weights_topk[:, k]  # [B*S]
+        sorted_indices = flat_experts.argsort(stable=True)
+        sorted_token_idx = flat_token_idx[sorted_indices]
+        sorted_weights = flat_weights[sorted_indices]
+        sorted_experts = flat_experts[sorted_indices]
 
-            # Process each expert separately (can be optimized with scatter ops)
-            for e in range(self.num_experts):
-                mask = (expert_idx == e)
-                if not mask.any():
-                    continue
-                token_states = x_flat[mask]  # [n_tokens, D]
+        expert_counts = torch.bincount(sorted_experts, minlength=self.num_experts).tolist()
 
-                # SwiGLU: silu(gate(x)) * up(x)
-                gate = F.silu(torch.matmul(token_states, self.gate_proj[e].T))  # [n, I]
-                up = torch.matmul(token_states, self.up_proj[e].T)  # [n, I]
-                expert_out = torch.matmul(gate * up, self.down_proj[e].T)  # [n, D]
+        final_out = torch.zeros(N, D, device=x.device, dtype=x.dtype)
+        start = 0
+        for e in range(self.num_experts):
+            count = expert_counts[e]
+            if count == 0:
+                continue
+            end = start + count
+            idx = sorted_token_idx[start:end]
+            w = sorted_weights[start:end]
+            token_states = x_flat[idx]
 
-                final_out[mask] += expert_out * weight[mask].unsqueeze(-1)
+            gate = F.silu(torch.matmul(token_states, self.gate_proj[e].T))
+            up = torch.matmul(token_states, self.up_proj[e].T)
+            expert_out = torch.matmul(gate * up, self.down_proj[e].T)
+
+            final_out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
+            start = end
 
         return final_out.view(B, S, D), aux_loss
 

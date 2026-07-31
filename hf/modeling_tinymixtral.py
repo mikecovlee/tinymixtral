@@ -78,17 +78,17 @@ class GQAAttention(nn.Module):
         q = self.q_proj(hidden_states).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        k = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-        v = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
         if position_ids is None:
             position_ids = torch.arange(S, device=hidden_states.device).unsqueeze(0).expand(B, -1)
         q, k = self.rotary_emb(q, position_ids), self.rotary_emb(k, position_ids)
 
         if attention_mask is not None:
+            k_exp = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
+            v_exp = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
             causal = torch.tril(torch.ones(S, S, device=hidden_states.device, dtype=torch.bool))
             combined = causal[None, None, :, :] & attention_mask[:, None, None, :]
             attn = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=combined,
+                q, k_exp, v_exp, attn_mask=combined,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
             )
@@ -97,6 +97,7 @@ class GQAAttention(nn.Module):
                 q, k, v, attn_mask=None,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=True,
+                enable_gqa=True,
             )
         return self.o_proj(attn.transpose(1, 2).reshape(B, S, -1))
 
@@ -124,6 +125,7 @@ class SparseMoE(nn.Module):
     def forward(self, x):
         B, S, D = x.shape
         x_flat = x.view(-1, D)
+        N = B * S
         logits = self.router(x_flat)
         if self.training and self.jitter_noise > 0:
             logits = logits * (1 + torch.randn_like(logits) * self.jitter_noise)
@@ -139,16 +141,31 @@ class SparseMoE(nn.Module):
             P_i = weights.mean(dim=0)
             aux = (f_i.detach() * P_i).sum() * self.num_experts
 
-        out = torch.zeros(B * S, D, device=x.device, dtype=x.dtype)
-        for k in range(self.top_k):
-            for e in range(self.num_experts):
-                m = (experts[:, k] == e)
-                if not m.any():
-                    continue
-                ts = x_flat[m]
-                gate = F.silu(ts @ self.gate_proj[e].T)
-                up = ts @ self.up_proj[e].T
-                out[m] += (gate * up @ self.down_proj[e].T) * w_topk[m, k].unsqueeze(-1)
+        flat_experts = experts.view(-1)
+        flat_weights = w_topk.view(-1)
+        flat_token_idx = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
+
+        sorted_indices = flat_experts.argsort(stable=True)
+        sorted_token_idx = flat_token_idx[sorted_indices]
+        sorted_weights = flat_weights[sorted_indices]
+        sorted_experts = flat_experts[sorted_indices]
+
+        expert_counts = torch.bincount(sorted_experts, minlength=self.num_experts).tolist()
+
+        out = torch.zeros(N, D, device=x.device, dtype=x.dtype)
+        start = 0
+        for e in range(self.num_experts):
+            count = expert_counts[e]
+            if count == 0:
+                continue
+            end = start + count
+            idx = sorted_token_idx[start:end]
+            w = sorted_weights[start:end]
+            ts = x_flat[idx]
+            gate = F.silu(ts @ self.gate_proj[e].T)
+            up = ts @ self.up_proj[e].T
+            out.index_add_(0, idx, ((gate * up @ self.down_proj[e].T) * w.unsqueeze(-1)).to(x.dtype))
+            start = end
         return out.view(B, S, D), aux
 
 

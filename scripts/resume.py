@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import torch
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
-    check_checkpoint_disk_space, final_save, make_adamw, make_cosine_schedule,
-    make_wsd_schedule, training_loop,
+    BF16AdamW, check_checkpoint_disk_space, final_save, make_adamw,
+    make_cosine_schedule, make_wsd_schedule, training_loop,
 )
 
 
@@ -32,6 +32,8 @@ def main():
     p.add_argument("--log-every", type=int, default=100)
     p.add_argument("--schedule", default="cosine", choices=["cosine", "wsd"],
                    help="LR schedule: cosine or wsd (Warmup-Stable-Decay)")
+    p.add_argument("--bf16-optim", action="store_true",
+                   help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
     p.add_argument("--eval-on-save", action="store_true",
                    help="每次保存后同步执行 CPU GLUE 评测")
     args = p.parse_args()
@@ -74,7 +76,7 @@ def main():
     bs, seq = args.batch_size, args.seq_len
     chunk = (seq + 1) * bs
 
-    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd)
+    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd, bf16_states=args.bf16_optim)
 
     state_path = latest / "training_state.pt"
     total_tok = step_done * bs * seq
@@ -87,7 +89,8 @@ def main():
                 if len(state["opt"].get("param_groups", [])) != 1:
                     raise
                 print("Loading legacy single-group AdamW state", flush=True)
-                opt = torch.optim.AdamW(
+                cls = BF16AdamW if args.bf16_optim else torch.optim.AdamW
+                opt = cls(
                     model.parameters(), lr=args.lr, weight_decay=args.wd,
                     betas=(0.9, 0.95),
                 )

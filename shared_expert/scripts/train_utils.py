@@ -49,7 +49,7 @@ class BF16AdamW(torch.optim.AdamW):
                     state["exp_avg"] = torch.zeros(p.shape, dtype=torch.bfloat16, device=p.device)
                     state["exp_avg_sq"] = torch.zeros(p.shape, dtype=torch.bfloat16, device=p.device)
 
-                state["step"] += 1
+                state["step"] = int(state["step"]) + 1
                 t = state["step"]
 
                 exp_avg = state["exp_avg"].float()

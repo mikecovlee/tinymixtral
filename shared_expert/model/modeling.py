@@ -110,27 +110,20 @@ class GQAAttention(nn.Module):
         k = self.k_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        # GQA: expand KV heads
-        k = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-        v = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-
         # RoPE
         if position_ids is None:
             position_ids = torch.arange(S, device=hidden_states.device).unsqueeze(0).expand(B, -1)
         q = self.rotary_emb(q, position_ids)
         k = self.rotary_emb(k, position_ids)
 
-        # FlashAttention via sdpa — 必须显式合并 causal + padding mask
-        # PyTorch 2.x 不允许 attn_mask 和 is_causal 同时设置
         if attention_mask is not None:
-            # attention_mask: [B, S] bool, True=valid token
-            # 构造 4D causal mask 并与 padding 合并
+            k_exp = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
+            v_exp = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
             causal = torch.tril(torch.ones(S, S, device=hidden_states.device, dtype=torch.bool))
-            # padding: [B, 1, 1, S] → 控制哪些 key 可见
-            pad_4d = attention_mask[:, None, None, :]  # [B, 1, 1, S]
-            combined = causal[None, None, :, :] & pad_4d  # [B, 1, S, S]
+            pad_4d = attention_mask[:, None, None, :]
+            combined = causal[None, None, :, :] & pad_4d
             attn_output = F.scaled_dot_product_attention(
-                q, k, v,
+                q, k_exp, v_exp,
                 attn_mask=combined,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
@@ -141,6 +134,7 @@ class GQAAttention(nn.Module):
                 attn_mask=None,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=True,
+                enable_gqa=True,
             )
 
         attn_output = attn_output.transpose(1, 2).reshape(B, S, -1)
@@ -244,17 +238,31 @@ class SparseMoE(nn.Module):
             P_i = routing_weights.mean(dim=0)
             aux_loss = (f_i.detach() * P_i).sum() * self.num_routed
 
-        for k in range(self.top_k):
-            expert_idx = selected_experts[:, k]
-            weight = routing_weights_topk[:, k]
-            for e in range(self.num_routed):
-                mask = (expert_idx == e)
-                if not mask.any():
-                    continue
-                expert_out = self._forward_expert(
-                    x_flat[mask], self.gate_proj[e], self.up_proj[e], self.down_proj[e]
-                )
-                out[mask] += expert_out * weight[mask].unsqueeze(-1)
+        N = B * S
+        flat_experts = selected_experts.view(-1)
+        flat_weights = routing_weights_topk.view(-1)
+        flat_token_idx = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
+
+        sorted_indices = flat_experts.argsort(stable=True)
+        sorted_token_idx = flat_token_idx[sorted_indices]
+        sorted_weights = flat_weights[sorted_indices]
+        sorted_experts = flat_experts[sorted_indices]
+
+        expert_counts = torch.bincount(sorted_experts, minlength=self.num_routed).tolist()
+
+        start = 0
+        for e in range(self.num_routed):
+            count = expert_counts[e]
+            if count == 0:
+                continue
+            end = start + count
+            idx = sorted_token_idx[start:end]
+            w = sorted_weights[start:end]
+            expert_out = self._forward_expert(
+                x_flat[idx], self.gate_proj[e], self.up_proj[e], self.down_proj[e]
+            )
+            out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
+            start = end
 
         return out.view(B, S, D), aux_loss
 
