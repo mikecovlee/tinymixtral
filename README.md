@@ -3,6 +3,7 @@
 A small Mixtral-style Mixture-of-Experts causal language model (~432M total, ~176M active parameters) for pretraining research on a single consumer GPU.
 
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral-yellow)](https://huggingface.co/mikecovlee/tinymixtral)
+[![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral--v2.0--beta-orange)](https://huggingface.co/mikecovlee/tinymixtral-v2.0-beta)
 
 ## Pretrained Model
 
@@ -15,6 +16,8 @@ model = AutoModelForCausalLM.from_pretrained(
 ```
 
 The latest model (SmolLM blend pretrain + Wiki/Cosmopedia post-train) is available at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral).
+
+The v2.0 beta (shared expert architecture, WSD schedule) is available at [mikecovlee/tinymixtral-v2.0-beta](https://huggingface.co/mikecovlee/tinymixtral-v2.0-beta).
 
 The legacy v1 model (C4 pretrain) has been moved to [mikecovlee/tinymixtral-v1.0](https://huggingface.co/mikecovlee/tinymixtral-v1.0).
 
@@ -75,9 +78,9 @@ python scripts/train.py --cache-dir data/pretrain/smollm_blend \
 
 ## Training Details
 
-- **Precision**: bf16 (model, AdamW states, autocast forward/backward)
+- **Precision**: bf16 (model + autocast forward/backward), fp32 optimizer states
 - **Optimizer**: AdamW (β=0.9,0.95, wd=0.1), weight decay only on ≥2D parameters
-- **LR schedule**: Cosine decay with linear warmup (warmup_steps=2000)
+- **LR schedule**: Cosine decay with linear warmup (warmup_steps=2000); WSD also available via `--schedule wsd`
 - **Gradient clipping**: 1.0
 - **Batch**: 24 × 1024 = 24,576 tokens/step
 - **Activation checkpointing**: enabled (required for 24GB VRAM)
@@ -286,6 +289,23 @@ The original model trained on C4-en (noisy web text). We ran an ablation replaci
 | Pretrain (C4) | C4-en | 3e-4 | 4B | 177,557 | 77.1 h | 3.0 |
 | Pretrain (SmolLM) | FineWeb-Edu + Cosmopedia v2 (89:11) | 7e-4 | 4B | 162,761 | 83.6 h | 2.5 |
 | Post-train | Wiki + Cosmopedia v2 (50:50) | 2e-5 | 1B | 40,691 | 20.5 h | 2.5 |
+
+### Standard Benchmarks (lm-evaluation-harness, 0-shot)
+
+| Task | Metric | v1.1 (432M) | v2.0 beta (498M) | SmolLM2-360M | Qwen3-0.6B |
+|------|--------|:---:|:---:|:---:|:---:|
+| HellaSwag | acc_norm | 0.308 | 0.326 | **0.563** | 0.473 |
+| PIQA | acc | 0.616 | 0.631 | **0.719** | 0.673 |
+| WinoGrande | acc | 0.524 | 0.506 | **0.587** | 0.563 |
+| ARC-Easy | acc | 0.456 | 0.474 | **0.705** | 0.609 |
+| ARC-Challenge | acc_norm | 0.247 | 0.272 | **0.383** | 0.340 |
+| OpenBookQA | acc_norm | 0.288 | 0.290 | **0.372** | 0.316 |
+| BoolQ | acc | 0.606 | 0.455 | 0.620 | **0.643** |
+| LAMBADA | acc | 0.227 | 0.224 | **0.532** | 0.401 |
+
+All numbers measured locally with identical settings (lm-eval-harness v0.4.12, 0-shot, cuda, bf16). Batch size does not affect log-likelihood evaluation results.
+
+SmolLM2-360M trained on 4T tokens; Qwen3-0.6B trained on 36T tokens. TinyMixtral trained on 4B tokens (~1000× less) on a single consumer GPU. The performance gap is primarily a data budget difference. v2.0 beta improves over v1.1 on most tasks (HellaSwag +1.8pp, PIQA +1.5pp, ARC-C +2.5pp) but regresses on BoolQ.
 
 ### GLUE (zero-shot)
 
