@@ -141,7 +141,12 @@ def _score_answers(
             with torch.amp.autocast(device_type=str(device).split(":")[0],
                                     dtype=autocast_dtype, enabled=use_autocast):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            logits = outputs["logits"].float()
+            logits_output = (
+                outputs.logits
+                if hasattr(outputs, "logits")
+                else outputs["logits"]
+            )
+            logits = logits_output.float()
 
         log_probs = F.log_softmax(logits, dim=-1)
 

@@ -28,6 +28,15 @@ results*.json
 # Logs
 *.log
 
+# Local verification/test scratch space
+.pytest_tmp*/
+tests/.tmp*/
+tests/.hf_cache*/
+tmp/
+
+# Local generated audit evidence (kept outside Git delivery commits)
+artifacts/
+
 # Conda
 .env/
 

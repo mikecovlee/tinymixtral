@@ -72,15 +72,27 @@ python scripts/mix_data.py data/pretrain/fineweb data/pretrain/cosmopedia \
 
 # 5. Pretrain (4B tokens, LR=7e-4, batch=24)
 python scripts/train.py --cache-dir data/pretrain/smollm_blend \
+  --output-dir checkpoints/smollm_blend \
   --batch-size 24 --max-tokens 4000000000 --lr 7e-4 \
   --keep-last-checkpoints 5 2>&1 | tee train.log
 ```
 
 ## Training Details
 
-- **Precision**: bf16 (model + autocast forward/backward), fp32 optimizer states
-- **Optimizer**: AdamW (β=0.9,0.95, wd=0.1), weight decay only on ≥2D parameters; `--bf16-optim` stores moments in bf16
-- **LR schedule**: Cosine decay with linear warmup (warmup_steps=2000); WSD also available via `--schedule wsd`
+> [!WARNING]
+> CPT training is transactional. Stock Hugging Face `Trainer`, a bare
+> `loss.backward()` / `optimizer.step()` loop, and stock gradient accumulation
+> are not supported: they can bypass CPT proposal validation, all-or-none
+> commit/abort, and exact-rollback/fail-stop handling. Run every optimizer
+> update through `scripts.train_utils.execute_training_iteration` (preferred),
+> or through `execute_training_step` only when the caller explicitly manages
+> the forward output and pre-forward snapshot. The repository `train.py` and
+> `resume.py` entry points already use the strict transaction path.
+
+- **Precision**: bf16 for ordinary model parameters and autocast compute; CPT projection/anchor/energy parameters, congestion prices, and recurrent routing state remain FP32. Optimizer moments preserve this parameter-dtype boundary.
+- **CPT projection preprocessing (strict TeX v1)**: for each token column vector, the Router computes `P x` and directly performs per-token FP32 L2 stable normalization. There is no softmax between `P x` and `z`. The later prototype and expert-kernel softmax operations remain unchanged; no softmax is applied after the final `Pi` probabilities.
+- **Optimizer**: AdamW (β=0.9,0.95, wd=0.1) by default, with weight decay only on ≥2D parameters. `--bf16-optim` selects BF16AdamW: update arithmetic is performed in FP32, moments for ordinary bf16 parameters are stored in bf16, and moments for FP32 CPT parameters remain FP32.
+- **LR schedule**: cosine decay with linear warmup by default; `--schedule wsd` selects Warmup-Stable-Decay with a decay ratio of 0.1. Schema-v5 checkpoints persist both the schedule kind and its WSD decay ratio for strict reconstruction.
 - **Gradient clipping**: 1.0
 - **Batch**: 24 × 1024 = 24,576 tokens/step
 - **Activation checkpointing**: enabled (required for 24GB VRAM)
@@ -98,74 +110,40 @@ checkpoints/smollm_blend/
 ├── step_0144718/          # periodic
 │   ├── config.json
 │   ├── pytorch_model.bin
-│   └── training_state.pt  # optimizer, scheduler, data position
+│   └── training_state.pt  # strict schema-v5 training state
 ├── ...
 └── step_0162761_final/    # final checkpoint
 ```
 
-`training_state.pt` contains optimizer/scheduler states, step, token count, shard position (`fi`/`ptr`), and schedule parameters — enabling exact training resumption.
+`training_state.pt` uses strict schema v5. In addition to optimizer/scheduler states, step, token count, and shard position (`fi`/`ptr`), it records `optimizer_kind` (`adamw` or `bf16_adamw`), `schedule_kind` (`cosine` or `wsd`), `schedule_decay_ratio`, CPT state version, RNG state, run identity, and code/data/tokenizer plus model/config hashes. Resume validates this identity before reconstructing the exact optimizer and scheduler.
 
 ## Resume Training
 
 ```bash
-python scripts/resume.py --batch-size 24
+python scripts/resume.py \
+  --checkpoint-dir checkpoints/smollm_blend \
+  --cache-dir data/pretrain/smollm_blend \
+  --tokenizer-dir tokenizer/ \
+  --batch-size 24 --seq-len 1024
 ```
 
-The script automatically locates the latest checkpoint, restores model/optimizer/scheduler state, and continues from the exact data position. Batch size, sequence length, and training target are read from the checkpoint.
+The script locates the latest valid checkpoint, verifies its schema-v5 hashes and manifests, restores model/optimizer/scheduler/RNG state, and continues from the exact data position. Optimizer kind, schedule kind, WSD ratio, and training target are inherited from the checkpoint. On resume, `--schedule` and `--bf16-optim`/`--no-bf16-optim` are optional identity assertions, not recipe overrides; an explicit mismatch is rejected. Batch size and sequence length must match the checkpoint.
 
 ## Post-Training
 
-Continue training on domain-specific data to address weaknesses. The example below uses Wikipedia + Cosmopedia v2 (50:50, 1B tokens) to improve formal grammar and factual knowledge.
+The strict CPT v1 `resume.py` entry point is continuation-only. It rejects `--max-tokens`, `--lr`, `--wd`, and `--warmup-steps` overrides because resetting the target, optimizer recipe, or schedule while retaining committed CPT state would break the schema-v5 training identity. A domain-adaptive phase therefore requires a separately designed new-run/state-transition protocol and is not represented as a `resume.py` command in this branch.
 
-```bash
-# 1. Tokenize Wikipedia (500M tokens)
-python scripts/prepare_data.py \
-  --dataset wikimedia/wikipedia --subset 20231101.en \
-  --tokenizer tokenizer/ --output data/posttrain/wiki \
-  --max-tokens 500000000 --force
-
-# 2. Tokenize Cosmopedia v2 (500M tokens)
-python scripts/prepare_data.py \
-  --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
-  --tokenizer tokenizer/ --output data/posttrain/cosmopedia \
-  --max-tokens 500000000 --force
-
-# 3. Mix shards (50/50)
-python scripts/mix_data.py data/posttrain/wiki data/posttrain/cosmopedia \
-  --output data/posttrain/knowledge_blend
-
-# 4. Post-train from best pretrain checkpoint
-python scripts/resume.py \
-  --checkpoint-dir checkpoints/smollm_blend \
-  --output-dir checkpoints/knowledge_posttrain \
-  --cache-dir data/posttrain/knowledge_blend \
-  --max-tokens 1000000000 --lr 2e-5 --warmup-steps 300 \
-  --batch-size 24 --save-every-min 60
-```
-
-Key differences from pretraining:
-
-| Aspect | Pretrain | Post-train |
-|--------|----------|------------|
-| Data | FineWeb-Edu + Cosmopedia (89:11) | Wiki + Cosmopedia (50:50) |
-| LR | 7e-4 | 2e-5 |
-| Warmup | 2,000 steps | 300 steps |
-| Schedule | Cosine from scratch | Fresh cosine, momentum preserved |
-| Target | 4B tokens | 1B tokens |
-
-`--max-tokens` triggers post-training mode: the step counter and data position reset to zero, the scheduler starts a fresh warmup+cosine cycle, but optimizer momentum (AdamW β₁/β₂ states) carries over from pretraining. The `--lr` flag correctly overrides the checkpoint's saved LR in post-training mode.
-
-### Evaluation
+## Evaluation
 
 ```bash
 # GLUE (8 tasks)
-python scripts/eval_glue.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
+python scripts/eval_glue.py --checkpoint checkpoints/smollm_blend/step_0162761_final \
   --tokenizer tokenizer/ --tasks all --limit 500 --batch-size 16
 
 # ARC (0-shot + 5-shot)
-python scripts/eval_arc.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
+python scripts/eval_arc.py --checkpoint checkpoints/smollm_blend/step_0162761_final \
   --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 0
-python scripts/eval_arc.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
+python scripts/eval_arc.py --checkpoint checkpoints/smollm_blend/step_0162761_final \
   --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 5
 ```
 
@@ -177,7 +155,7 @@ A pretrained model is already available at [mikecovlee/tinymixtral](https://hugg
 
 ```bash
 python scripts/publish_hf.py \
-  --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
+  --checkpoint checkpoints/smollm_blend/step_0162761_final \
   --output publish/ --tokenizer tokenizer/
 ```
 
@@ -212,7 +190,7 @@ api.upload_folder(repo_id="your-username/tinymixtral", folder_path="publish/")
 python scripts/chat_hf.py mikecovlee/tinymixtral
 
 # From local checkpoint (native model loader)
-python scripts/chat.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final --tokenizer tokenizer/
+python scripts/chat.py --checkpoint checkpoints/smollm_blend/step_0162761_final --tokenizer tokenizer/
 
 # From local publish directory
 python scripts/chat_hf.py publish/
@@ -264,15 +242,19 @@ tinymixtral/
 
 2. **Pre-tokenized shards** — Data is tokenized once to disk, eliminating CPU bottleneck during training. Shards cycle round-robin; each shard is loaded on demand.
 
-3. **bf16 model, flexible optimizer** — Model parameters and forward/backward passes use bf16. Optimizer states default to fp32; `--bf16-optim` stores them in bf16 (~50% optimizer VRAM savings).
+3. **Mixed precision with FP32 CPT state** — Ordinary model parameters and autocast compute use bf16. CPT projection/anchor/energy parameters, congestion prices, and recurrent routing state remain FP32. Both standard AdamW and `--bf16-optim` preserve FP32 optimizer moments for FP32 CPT parameters; BF16AdamW stores moments for ordinary bf16 parameters in bf16 while performing update arithmetic in FP32.
 
-4. **Auxiliary loss (Mixtral-style)** — `L_aux = N × sum_i(f_i × P_i)` where `f_i` (fraction of routed tokens) is detached and `P_i` (mean router softmax) retains gradient. Aux losses are averaged across layers before applying the coefficient.
+   Strict TeX CPT Router v1 preprocesses every token as `x -> P x -> per-token L2 stable normalization`. In token-major code, normalization is applied independently along the final projection dimension. No projection softmax is inserted between `P x` and `z`.
 
-5. **GQA with SDPA** — 14 query heads share 2 key/value heads (7:1 ratio). Training path uses `enable_gqa=True` with `is_causal=True` (no KV expansion). When a padding mask is present (eval/inference), KV heads are explicitly expanded and a 4D boolean mask is constructed.
+4. **Strict optimizer/schedule identity** — Schema-v5 checkpoints bind `adamw|bf16_adamw`, `cosine|wsd`, and the WSD decay ratio to the saved run. Resume reconstructs these values from the checkpoint and treats CLI optimizer/schedule flags only as optional consistency assertions.
 
-6. **Atomic checkpoint saves** — Checkpoints are written to a temporary directory and atomically renamed, preventing corruption from interrupted saves.
+5. **CPT congestion-price control** — Expert soft loads are detached from the task graph, accumulated from the complete CPT probability matrix, and used only to prepare the next congestion-price candidate after an accepted optimizer step. No expert load-balancing auxiliary loss is added to the language-model objective.
 
-7. **Signal handling** — SIGINT/SIGTERM triggers a clean save after the current step completes.
+6. **GQA with SDPA** — 14 query heads share 2 key/value heads (7:1 ratio). Training path uses `enable_gqa=True` with `is_causal=True` (no KV expansion). When a padding mask is present (eval/inference), KV heads are explicitly expanded and a 4D boolean mask is constructed.
+
+7. **Atomic checkpoint saves** — Checkpoints are written to a temporary directory and atomically renamed, preventing corruption from interrupted saves.
+
+8. **Signal handling** — SIGINT/SIGTERM triggers a clean save after the current step completes.
 
 ## Results
 
@@ -441,35 +423,9 @@ python scripts/train.py --cache-dir data/c4/tokenized \
 | Grad clip | 1.0 |
 | Time | ~77 h |
 
-### Post-train (1B tokens)
+### Historical post-train result (1B tokens)
 
-Continue from the C4 checkpoint on higher-quality data:
-
-```bash
-# 3. Tokenize FineWeb-Edu (500M tokens)
-python scripts/prepare_data.py \
-  --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
-  --tokenizer tokenizer/ --output data/posttrain/fineweb \
-  --max-tokens 500000000 --force
-
-# 4. Tokenize Cosmopedia v2 (500M tokens)
-python scripts/prepare_data.py \
-  --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
-  --tokenizer tokenizer/ --output data/posttrain/cosmopedia \
-  --max-tokens 500000000 --force
-
-# 5. Mix shards (50/50)
-python scripts/mix_data.py data/posttrain/fineweb data/posttrain/cosmopedia \
-  --output data/posttrain/mixed
-
-# 6. Post-train
-python scripts/resume.py \
-  --checkpoint-dir checkpoints/run \
-  --output-dir checkpoints/posttrain \
-  --cache-dir data/posttrain/mixed \
-  --max-tokens 1000000000 --lr 5e-5 --warmup-steps 300 \
-  --batch-size 22 --save-every-min 60
-```
+The table below records the original upstream v1.0 experiment. Its former command reset the target, learning rate, warmup, and data cursor through `resume.py`; that workflow is intentionally unsupported by the current strict CPT resume path and is therefore omitted here. Reproducing the historical run requires the corresponding historical upstream revision rather than the current CPT v1 entry point.
 
 | Parameter | Value |
 |-----------|-------|
