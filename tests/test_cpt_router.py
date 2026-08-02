@@ -1,785 +1,471 @@
-import copy
+import inspect
 
 import pytest
 import torch
 import torch.nn.functional as F
 
+from model.config import TinyMixtralConfig
 from model.cpt_router import CPTRouter
-from model.modeling import TinyMixtralForCausalLM
+from model.modeling import GQAAttention, SparseMoE, TinyMixtralForCausalLM
 
 
-class _GeneralRowPathRouter(CPTRouter):
-    """Test-only Router that exercises gather/scatter with an all-valid mask."""
+def tiny_config(**overrides):
+    values = {
+        "vocab_size": 41,
+        "hidden_size": 8,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 2,
+        "num_key_value_heads": 1,
+        "head_dim": 4,
+        "max_position_embeddings": 32,
+        "num_local_experts": 3,
+        "num_experts_per_tok": 2,
+        "expert_intermediate_size": 16,
+        "cpt_projection_dim": 4,
+        "cpt_init_seed": 17,
+    }
+    values.update(overrides)
+    return TinyMixtralConfig(**values)
 
-    @staticmethod
-    def _all_routes_valid(route_valid_mask: torch.Tensor) -> bool:
-        return False
 
-
-def _reference_router(
-    router: CPTRouter,
-    hidden_states: torch.Tensor,
-    route_valid_mask: torch.Tensor | None = None,
-    reset_mask: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Independent token-by-token implementation of the column-vector math."""
-    batch_size, seq_len, _ = hidden_states.shape
-    if route_valid_mask is None:
-        route_valid_mask = torch.ones(
-            batch_size,
-            seq_len,
-            dtype=torch.bool,
-            device=hidden_states.device,
-        )
+@torch.no_grad()
+def column_vector_oracle(router, hidden_states, valid_mask=None):
+    """Literal column-vector implementation of the authoritative equations."""
+    x = hidden_states.float()
+    batch, sequence, _ = x.shape
+    if valid_mask is None:
+        valid_mask = torch.ones(batch, sequence, dtype=torch.bool, device=x.device)
     else:
-        route_valid_mask = route_valid_mask.to(
-            device=hidden_states.device,
-            dtype=torch.bool,
-        )
-    first_valid = route_valid_mask & (
-        route_valid_mask.to(torch.int64).cumsum(dim=1) == 1
-    )
-    if reset_mask is None:
-        reset_mask = first_valid
-    else:
-        reset_mask = reset_mask.to(
-            device=hidden_states.device,
-            dtype=torch.bool,
-        ) | first_valid
+        valid_mask = valid_mask.to(device=x.device, dtype=torch.bool)
 
-    routing_hidden_states = torch.where(
-        route_valid_mask[:, :, None],
-        hidden_states,
-        torch.zeros_like(hidden_states),
-    )
-    projected_rows = F.linear(
-        routing_hidden_states,
-        router.projection,
-    ).float()
-    z_rows = projected_rows / projected_rows.norm(
+    energy = router.energy - router.energy.mean(dim=-1, keepdim=True)
+    kernel = torch.softmax(
+        (energy - router.congestion_price.unsqueeze(0)) / router.expert_temperature,
         dim=-1,
-        keepdim=True,
-    ).clamp_min(router.eps_z)
-
-    state_s = torch.zeros(
-        batch_size,
-        router.projection_dim,
-        router.num_prototypes,
-        dtype=torch.float32,
-        device=hidden_states.device,
     )
-    state_nu = torch.zeros(
-        batch_size,
-        router.num_prototypes,
+    result = torch.zeros(
+        batch,
+        sequence,
+        router.num_experts,
+        device=x.device,
         dtype=torch.float32,
-        device=hidden_states.device,
     )
-    anchors = router.anchors.float()
-    q_by_position = []
-
-    for position in range(seq_len):
-        valid = route_valid_mask[:, position]
-        reset = reset_mask[:, position]
-        state_s = torch.where(
-            reset[:, None, None],
-            torch.zeros_like(state_s),
-            state_s,
-        )
-        state_nu = torch.where(
-            reset[:, None],
-            torch.zeros_like(state_nu),
-            state_nu,
-        )
-
-        beta = router.beta_max * state_nu / (
-            state_nu + router.kappa_beta
-        )
-        mixed = (
-            anchors[None, :, :] * (1.0 - beta[:, None, :])
-            + state_s * beta[:, None, :]
-        )
-        prototypes = mixed / mixed.norm(
-            dim=1,
-            keepdim=True,
-        ).clamp_min(router.eps_m)
-        prototype_logits = torch.einsum(
-            "bd,bdk->bk",
-            z_rows[:, position, :],
-            prototypes,
-        ) / router.projection_temperature
-        q_current = torch.softmax(prototype_logits, dim=-1)
-        q_by_position.append(
-            torch.where(
-                valid[:, None],
-                q_current,
-                torch.zeros_like(q_current),
-            )
-        )
-
-        gradient_s = (
-            (state_s - z_rows[:, position, :, None])
-            * q_current[:, None, :]
-            + router.lambda_sa * (state_s - anchors[None, :, :])
-        )
-        candidate_s = state_s - router.state_step_size * gradient_s
-        candidate_s = candidate_s / torch.maximum(
-            torch.ones((), dtype=candidate_s.dtype, device=candidate_s.device),
-            candidate_s.norm(dim=1, keepdim=True) / router.state_radius,
-        )
-        candidate_nu = router.rho_beta * state_nu + q_current
-        state_s = torch.where(
-            valid[:, None, None],
-            candidate_s,
-            state_s,
-        )
-        state_nu = torch.where(
-            valid[:, None],
-            candidate_nu,
-            state_nu,
-        )
-
-    if q_by_position:
-        q_all_rows = torch.stack(q_by_position, dim=1)
-    else:
-        q_all_rows = torch.zeros(
-            batch_size,
-            0,
+    for batch_index in range(batch):
+        short_state = torch.zeros(
+            router.projection_dim,
             router.num_prototypes,
-            dtype=torch.float32,
-            device=hidden_states.device,
+            device=x.device,
         )
-    flat_valid_indices = route_valid_mask.reshape(-1).nonzero(
-        as_tuple=False
-    ).flatten()
-    q_valid_rows = q_all_rows.reshape(
-        -1,
-        router.num_prototypes,
-    ).index_select(0, flat_valid_indices)
+        responsibility = torch.zeros(router.num_prototypes, device=x.device)
+        for position in range(sequence):
+            if not bool(valid_mask[batch_index, position]):
+                continue
+            x_column = x[batch_index, position].unsqueeze(1)
+            projected = router.projection @ x_column
+            projected_norm = float(torch.linalg.vector_norm(projected))
+            z = projected / max(projected_norm, router.eps_z)
+            beta = (
+                router.beta_max
+                * responsibility
+                / (responsibility + router.kappa_beta)
+            )
+            mixed = (
+                router.anchors * (1.0 - beta.unsqueeze(0))
+                + short_state * beta.unsqueeze(0)
+            )
+            prototype_norms = torch.linalg.vector_norm(mixed, dim=0, keepdim=True)
+            prototypes = mixed / prototype_norms.clamp_min(router.eps_m)
+            q = torch.softmax(
+                (prototypes.T @ z).squeeze(1) / router.prototype_temperature,
+                dim=0,
+            )
+            result[batch_index, position] = kernel.T @ q
 
-    centered_energy = router.energy.float()
-    centered_energy = centered_energy - centered_energy.mean(
-        dim=-1,
-        keepdim=True,
+            gradient = (
+                (short_state - z.expand(-1, router.num_prototypes))
+                * q.unsqueeze(0)
+                + router.lambda_sa * (short_state - router.anchors)
+            )
+            candidate = short_state - router.state_step_size * gradient
+            norms = torch.linalg.vector_norm(candidate, dim=0, keepdim=True)
+            short_state = candidate / torch.maximum(
+                torch.ones_like(norms), norms / router.state_radius
+            )
+            responsibility = router.rho_beta * responsibility + q
+    return result
+
+
+def test_config_derives_k_and_authoritative_defaults():
+    config = tiny_config()
+    assert config.cpt_num_prototypes == 2 * config.num_local_experts == 6
+    assert config.cpt_kappa_beta == pytest.approx(
+        1.0 / (6 * (1.0 - config.cpt_rho_beta)), rel=2e-6
     )
-    expert_kernel = torch.softmax(
-        (
-            centered_energy
-            - router.congestion_price.detach().float()[None, :]
-        ) / router.expert_temperature,
-        dim=-1,
+    assert config.cpt_lambda_sa == pytest.approx(1.0 / 6, rel=2e-6)
+    assert config.cpt_prototype_temperature == pytest.approx(0.5)
+    assert config.cpt_state_step_size == pytest.approx(
+        0.1 / (1.0 + 1.0 / 6), rel=2e-6
     )
-    probabilities = q_valid_rows @ expert_kernel
-    return q_valid_rows, expert_kernel, probabilities, flat_valid_indices
+    assert config.cpt_energy_init_scale == pytest.approx(
+        0.05 * config.cpt_expert_temperature
+    )
+    assert config.cpt_price_learning_rate == pytest.approx(
+        1e-2 * config.cpt_expert_temperature
+    )
 
 
-def test_cpt_initialization_invariants(tiny_config) -> None:
-    router = CPTRouter(tiny_config, layer_index=0)
+@pytest.mark.parametrize(
+    "updates, message",
+    [
+        ({"cpt_num_prototypes": 5}, r"2 \* num_local_experts"),
+        ({"cpt_router_version": 2}, "version=1"),
+        ({"cpt_projection_dim": 1}, "more than two"),
+        ({"cpt_rho_beta": float("nan")}, "finite"),
+        ({"cpt_beta_max": 0.0}, "cpt_beta_max"),
+        ({"cpt_beta_max": 0.5}, "cpt_beta_max"),
+        ({"cpt_capacity_factor": 0.9}, "at least 1"),
+        ({"num_experts_per_tok": 2.0}, "positive integer"),
+        ({"num_experts_per_tok": True}, "positive integer"),
+        ({"num_hidden_layers": 2.0}, "positive integer"),
+        ({"num_hidden_layers": True}, "positive integer"),
+        ({"hidden_size": 8.0}, "positive integer"),
+        ({"hidden_size": True}, "positive integer"),
+        ({"num_local_experts": 3.0}, "positive integer"),
+        ({"num_local_experts": True}, "positive integer"),
+        ({"num_experts_per_tok": 1}, "must remain 2"),
+    ],
+)
+def test_config_rejects_invalid_cpt_contract(updates, message):
+    with pytest.raises(ValueError, match=message):
+        tiny_config(**updates)
 
-    projection_gram = router.projection.float() @ router.projection.float().T
+
+def test_default_state_step_size_uses_effective_lambda_sa():
+    config = tiny_config(cpt_lambda_sa=0.25)
+    assert config.cpt_state_step_size == pytest.approx(0.1 / 1.25, rel=2e-6)
+
+
+def test_energy_initialization_accepts_valid_scale_below_eps_init():
+    router = CPTRouter(
+        tiny_config(cpt_energy_init_scale=1e-9),
+        layer_index=0,
+    )
+    centered_energy = router.energy - router.energy.mean(dim=-1, keepdim=True)
+    assert torch.isfinite(centered_energy).all()
+    assert not torch.equal(
+        centered_energy,
+        centered_energy[:1].expand_as(centered_energy),
+    )
+
+
+def test_initialization_uses_eps_init_only_in_authoritative_energy_denominator():
+    router = CPTRouter(
+        tiny_config(cpt_projection_dim=2, cpt_eps_init=10.0),
+        layer_index=0,
+    )
     torch.testing.assert_close(
-        projection_gram,
-        torch.eye(tiny_config.cpt_projection_dim),
-        atol=2e-5,
-        rtol=2e-5,
-    )
-    torch.testing.assert_close(
-        router.anchors.float().norm(dim=0),
-        torch.ones(tiny_config.cpt_num_prototypes),
+        torch.linalg.vector_norm(router.anchors, dim=0),
+        torch.ones(router.num_prototypes),
         atol=2e-6,
         rtol=2e-6,
     )
+    assert torch.unique(router.anchors.T, dim=0).shape[0] == router.num_prototypes
+    centered_energy = router.energy - router.energy.mean(dim=-1, keepdim=True)
+    assert torch.isfinite(centered_energy).all()
+    assert not torch.equal(
+        centered_energy,
+        centered_energy[:1].expand_as(centered_energy),
+    )
+
+
+@pytest.mark.parametrize("seed", [3, 5, 7, 11, 13])
+def test_token_major_forward_matches_column_vector_oracle(seed):
+    torch.manual_seed(seed)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    hidden = torch.randn(2, 5, router.hidden_size)
+    mask = torch.tensor([[1, 1, 0, 1, 0], [0, 1, 1, 1, 1]], dtype=torch.bool)
+    actual = router(hidden, mask).probabilities
+    expected = column_vector_oracle(router, hidden, mask)
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
     torch.testing.assert_close(
-        router.energy.float().mean(dim=0),
-        torch.zeros(tiny_config.num_local_experts),
-        atol=2e-7,
-        rtol=0.0,
+        actual[mask].sum(dim=-1), torch.ones(int(mask.sum())), atol=2e-6, rtol=0
     )
+    assert torch.equal(actual[~mask], torch.zeros_like(actual[~mask]))
+
+
+@pytest.mark.parametrize("scale", [0.0, 1e-12, 1.0, 1e6])
+def test_router_is_finite_for_zero_near_zero_and_extreme_inputs(scale):
+    torch.manual_seed(9)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    hidden = torch.randn(2, 4, router.hidden_size) * scale
+    output = router(hidden)
+    assert torch.isfinite(output.probabilities).all()
+    assert torch.isfinite(output.proposal.load_sum).all()
     torch.testing.assert_close(
-        router.energy.float().mean(dim=1),
-        torch.zeros(tiny_config.cpt_num_prototypes),
-        atol=2e-7,
-        rtol=0.0,
-    )
-    assert torch.isfinite(router.energy).all()
-    assert router.energy.abs().amax() <= tiny_config.cpt_energy_init_scale
-    assert router.energy.abs().amax() > 0
-
-    expert_kernel = router._expert_kernel()
-    torch.testing.assert_close(
-        expert_kernel.sum(dim=-1),
-        torch.ones(tiny_config.cpt_num_prototypes),
-    )
-    assert torch.pdist(expert_kernel).max() > 0
-    assert router.congestion_price.dtype == torch.float32
-    assert torch.equal(
-        router.congestion_price,
-        torch.zeros(tiny_config.num_local_experts),
-    )
-    assert router.state_version.dtype == torch.int64
-    assert router.state_version.item() == 0
-    assert router.router_algorithm_version.dtype == torch.int64
-    assert router.router_algorithm_version.item() == tiny_config.cpt_router_version
-
-
-def test_strict_tex_projection_is_directly_normalized_per_token(
-    tiny_config,
-) -> None:
-    """Verify x -> P x -> per-token L2 normalization with column vectors."""
-    router = CPTRouter(tiny_config, layer_index=0).eval()
-    controlled_anchors = torch.zeros_like(router.anchors)
-    controlled_anchors[0, 0] = 1.0
-    controlled_anchors[0, 1] = -1.0
-    controlled_anchors[1, 2] = 1.0
-    controlled_anchors[1, 3] = -1.0
-    with torch.no_grad():
-        router.anchors.copy_(controlled_anchors)
-
-    desired_projected_column = torch.tensor(
-        [[3.0], [-2.0], [1.0], [-0.5], [0.25], [-0.75], [0.5], [-1.25]],
-        dtype=torch.float32,
-    )
-    hidden_column = router.projection.float().T @ desired_projected_column
-    projected_column = router.projection.float() @ hidden_column
-    z_column = projected_column / projected_column.norm(p=2).clamp_min(router.eps_z)
-    prototype_columns = controlled_anchors / controlled_anchors.norm(
-        dim=0,
-        keepdim=True,
-    ).clamp_min(router.eps_m)
-    expected_q_column = torch.softmax(
-        prototype_columns.T @ z_column / router.projection_temperature,
-        dim=0,
-    )
-
-    with torch.no_grad():
-        actual = router(hidden_column.T.unsqueeze(0))
-
-    torch.testing.assert_close(
-        projected_column,
-        desired_projected_column,
-        rtol=0.0,
+        output.probabilities.sum(dim=-1),
+        torch.ones(2, 4),
         atol=2e-6,
+        rtol=0,
     )
-    torch.testing.assert_close(z_column.norm(p=2), torch.tensor(1.0))
-    torch.testing.assert_close(actual.q_probabilities.T, expected_q_column)
 
-    # A projection-coordinate softmax would change the strict TeX geometry.
-    softmax_column = torch.softmax(projected_column, dim=0)
-    softmax_z_column = softmax_column / softmax_column.norm(p=2).clamp_min(
-        router.eps_z
-    )
-    softmax_q_column = torch.softmax(
-        prototype_columns.T @ softmax_z_column / router.projection_temperature,
-        dim=0,
-    )
-    assert (expected_q_column - softmax_q_column).abs().max() > 1e-4
 
-    zero_hidden_column = torch.zeros(tiny_config.hidden_size, 1)
-    with torch.no_grad():
-        zero_actual = router(zero_hidden_column.T.unsqueeze(0))
+def test_strict_v1_projection_has_no_projection_softmax():
+    router = CPTRouter(tiny_config(), layer_index=0)
+    hidden = torch.tensor([[[2.0, -1.0, 0.5, 3.0, -2.0, 1.5, 0.25, -0.75]]])
+    actual = router(hidden).probabilities[0, 0]
+
+    projected = router.projection @ hidden[0, 0].float().unsqueeze(1)
+    wrong_z = torch.softmax(projected.squeeze(1), dim=0)
+    wrong_z = wrong_z / torch.linalg.vector_norm(wrong_z).clamp_min(router.eps_z)
+    prototypes = router.anchors / torch.linalg.vector_norm(
+        router.anchors, dim=0, keepdim=True
+    ).clamp_min(router.eps_m)
+    wrong_q = torch.softmax(
+        prototypes.T @ wrong_z / router.prototype_temperature, dim=0
+    )
+    wrong_pi = router.expert_kernel().T @ wrong_q
+    assert not torch.allclose(actual, wrong_pi, atol=1e-5, rtol=1e-5)
+
+
+def test_router_emits_final_probabilities_with_one_micro_batch_gemm():
+    source = inspect.getsource(CPTRouter.forward)
+    assert "flat_prototype_probabilities.index_select" in source
+    assert "valid_probabilities = prototype_probabilities @ kernel" in source
+    assert ".view(batch_size, sequence_length, self.num_experts)" in source
+    assert source.count("@ kernel") == 1
+
+
+def test_padding_is_not_routed_and_does_not_advance_sequence_state():
+    torch.manual_seed(11)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    valid = torch.randn(1, 3, router.hidden_size)
+    pads_left = torch.randn(1, 2, router.hidden_size) * 100
+    pads_right = torch.randn(1, 2, router.hidden_size) * 100
+    padded = torch.cat((pads_left, valid, pads_right), dim=1)
+    mask = torch.tensor([[0, 0, 1, 1, 1, 0, 0]], dtype=torch.bool)
+
+    plain_output = router(valid)
+    padded_output = router(padded, mask)
     torch.testing.assert_close(
-        zero_actual.q_probabilities,
-        torch.full_like(
-            zero_actual.q_probabilities,
-            1.0 / router.num_prototypes,
-        ),
+        padded_output.probabilities[:, 2:5],
+        plain_output.probabilities,
+        atol=2e-6,
+        rtol=2e-6,
     )
-
-
-def test_production_router_matches_independent_reference_and_column_formula(
-    tiny_config,
-) -> None:
-    torch.manual_seed(401)
-    router = CPTRouter(tiny_config, layer_index=1).eval()
-    hidden_states = torch.randn(2, 5, tiny_config.hidden_size)
-    route_valid_mask = torch.tensor(
-        [
-            [True, True, False, True, True],
-            [False, True, True, True, False],
-        ]
+    assert torch.equal(
+        padded_output.probabilities[~mask],
+        torch.zeros_like(padded_output.probabilities[~mask]),
     )
-    reset_mask = torch.tensor(
-        [
-            [True, False, False, True, False],
-            [False, True, False, False, False],
-        ]
-    )
-
-    with torch.no_grad():
-        actual = router(
-            hidden_states,
-            route_valid_mask=route_valid_mask,
-            reset_mask=reset_mask,
-        )
-        expected_q, expected_b, expected_pi_rows, expected_indices = (
-            _reference_router(
-                router,
-                hidden_states,
-                route_valid_mask,
-                reset_mask,
-            )
-        )
-
-    torch.testing.assert_close(actual.q_probabilities, expected_q)
-    torch.testing.assert_close(actual.expert_kernel, expected_b)
-    torch.testing.assert_close(actual.probabilities, expected_pi_rows)
-    assert torch.equal(actual.flat_valid_indices, expected_indices)
-
-    # Column-vector theory: Pi=B^T Q. Token-major code stores Pi^T=Q^T B.
-    q_columns = actual.q_probabilities.T
-    probability_columns = actual.expert_kernel.T @ q_columns
-    torch.testing.assert_close(actual.probabilities, probability_columns.T)
-    torch.testing.assert_close(
-        actual.probabilities.sum(dim=-1),
-        torch.ones(actual.probabilities.size(0)),
-    )
-    assert not torch.allclose(
-        actual.probabilities,
-        torch.softmax(actual.probabilities, dim=-1),
-    )
-    assert actual.proposal.valid.item()
-    assert actual.proposal.token_count.item() == int(route_valid_mask.sum())
-    torch.testing.assert_close(
-        actual.proposal.load_sum,
-        actual.probabilities.sum(dim=0),
-    )
-
-
-def test_dense_training_fast_path_matches_independent_column_reference(
-    tiny_config,
-) -> None:
-    """The all-valid optimization must preserve the exact causal equations."""
-    torch.manual_seed(4011)
-    router = CPTRouter(tiny_config, layer_index=0).eval()
-    hidden_states = torch.randn(3, 9, tiny_config.hidden_size)
-    route_valid_mask = torch.ones(3, 9, dtype=torch.bool)
-    reset_mask = torch.zeros_like(route_valid_mask)
-    reset_mask[:, 0] = True
-    reset_mask[1, 5] = True
-
-    with torch.no_grad():
-        actual = router(
-            hidden_states,
-            route_valid_mask=route_valid_mask,
-            reset_mask=reset_mask,
-        )
-        expected_q, expected_b, expected_pi_rows, expected_indices = (
-            _reference_router(
-                router,
-                hidden_states,
-                route_valid_mask,
-                reset_mask,
-            )
-        )
-
-    torch.testing.assert_close(actual.q_probabilities, expected_q)
-    torch.testing.assert_close(actual.expert_kernel, expected_b)
-    torch.testing.assert_close(actual.probabilities, expected_pi_rows)
-    assert torch.equal(actual.flat_valid_indices, expected_indices)
-    assert actual.proposal.valid.item()
-
-
-def test_trusted_dense_defaults_match_explicit_controls_and_gradients(
-    tiny_config,
-    monkeypatch,
-) -> None:
-    """The ``None`` provenance must be exact, differentiable, and sync-free."""
-    torch.manual_seed(40115)
-    trusted = CPTRouter(tiny_config, layer_index=0).train()
-    explicit = CPTRouter(tiny_config, layer_index=0).train()
-    explicit.load_state_dict(copy.deepcopy(trusted.state_dict()), strict=True)
-
-    trusted_hidden = torch.randn(
-        2,
-        7,
-        tiny_config.hidden_size,
-        requires_grad=True,
-    )
-    explicit_hidden = trusted_hidden.detach().clone().requires_grad_(True)
-    route_valid_mask = torch.ones(2, 7, dtype=torch.bool)
-    reset_mask = torch.zeros_like(route_valid_mask)
-    reset_mask[:, 0] = True
-
-    def reject_dense_tensor_probe(_mask):
-        raise AssertionError("trusted dense controls must not inspect the mask")
-
-    def reject_dynamic_dense_output(*_args, **_kwargs):
-        raise AssertionError(
-            "trusted dense controls must not use nonzero/tolist synchronization"
-        )
-
-    monkeypatch.setattr(trusted, "_all_routes_valid", reject_dense_tensor_probe)
-    original_nonzero = torch.Tensor.nonzero
-    original_tolist = torch.Tensor.tolist
-    monkeypatch.setattr(torch.Tensor, "nonzero", reject_dynamic_dense_output)
-    monkeypatch.setattr(torch.Tensor, "tolist", reject_dynamic_dense_output)
-    trusted_output = trusted(trusted_hidden)
-    monkeypatch.setattr(torch.Tensor, "nonzero", original_nonzero)
-    monkeypatch.setattr(torch.Tensor, "tolist", original_tolist)
-    explicit_output = explicit(
-        explicit_hidden,
-        route_valid_mask=route_valid_mask,
-        reset_mask=reset_mask,
-    )
-
-    torch.testing.assert_close(
-        trusted_output.q_probabilities,
-        explicit_output.q_probabilities,
-    )
-    torch.testing.assert_close(
-        trusted_output.probabilities,
-        explicit_output.probabilities,
-    )
-    torch.testing.assert_close(
-        trusted_output.sequence_state.state_s,
-        explicit_output.sequence_state.state_s,
-    )
-    torch.testing.assert_close(
-        trusted_output.sequence_state.state_nu,
-        explicit_output.sequence_state.state_nu,
-    )
-    expected_indices = torch.arange(trusted_hidden.shape[0] * trusted_hidden.shape[1])
-    assert torch.equal(trusted_output.flat_valid_indices, expected_indices)
-    assert torch.equal(explicit_output.flat_valid_indices, expected_indices)
-
-    trusted_loss = (
-        trusted_output.probabilities.square().mean()
-        + trusted_output.q_probabilities.square().mean()
-    )
-    explicit_loss = (
-        explicit_output.probabilities.square().mean()
-        + explicit_output.q_probabilities.square().mean()
-    )
-    trusted_loss.backward()
-    explicit_loss.backward()
-    torch.testing.assert_close(trusted_hidden.grad, explicit_hidden.grad)
-    for (trusted_name, trusted_parameter), (
-        explicit_name,
-        explicit_parameter,
-    ) in zip(trusted.named_parameters(), explicit.named_parameters()):
-        assert trusted_name == explicit_name
-        assert trusted_parameter.grad is not None
-        assert explicit_parameter.grad is not None
-        torch.testing.assert_close(
-            trusted_parameter.grad,
-            explicit_parameter.grad,
-        )
-
-
-def test_trusted_dense_default_reset_matches_explicit_continuation(
-    tiny_config,
-) -> None:
-    router = CPTRouter(tiny_config, layer_index=0).eval()
-    hidden_states = torch.randn(2, 8, tiny_config.hidden_size)
-
-    with torch.inference_mode():
-        prefix = router(hidden_states[:, :3])
-        default_continuation = router(
-            hidden_states[:, 3:],
-            sequence_state=prefix.sequence_state,
-        )
-        explicit_continuation = router(
-            hidden_states[:, 3:],
-            route_valid_mask=torch.ones(2, 5, dtype=torch.bool),
-            reset_mask=torch.zeros(2, 5, dtype=torch.bool),
-            sequence_state=prefix.sequence_state,
-        )
-
-    torch.testing.assert_close(
-        default_continuation.q_probabilities,
-        explicit_continuation.q_probabilities,
-    )
-    torch.testing.assert_close(
-        default_continuation.probabilities,
-        explicit_continuation.probabilities,
-    )
-    torch.testing.assert_close(
-        default_continuation.sequence_state.state_s,
-        explicit_continuation.sequence_state.state_s,
-    )
-    torch.testing.assert_close(
-        default_continuation.sequence_state.state_nu,
-        explicit_continuation.sequence_state.state_nu,
-    )
-
-
-def test_dense_and_general_row_paths_match_outputs_states_and_gradients(
-    tiny_config,
-) -> None:
-    torch.manual_seed(4012)
-    dense = CPTRouter(tiny_config, layer_index=0).train()
-    general = _GeneralRowPathRouter(tiny_config, layer_index=0).train()
-    general.load_state_dict(copy.deepcopy(dense.state_dict()), strict=True)
-    hidden_dense = torch.randn(
-        3,
-        11,
-        tiny_config.hidden_size,
-        requires_grad=True,
-    )
-    hidden_general = hidden_dense.detach().clone().requires_grad_(True)
-    route_valid_mask = torch.ones(3, 11, dtype=torch.bool)
-    reset_mask = torch.zeros_like(route_valid_mask)
-    reset_mask[:, 0] = True
-    reset_mask[2, 7] = True
-
-    dense_output = dense(hidden_dense, route_valid_mask, reset_mask)
-    general_output = general(hidden_general, route_valid_mask, reset_mask)
-    torch.testing.assert_close(
-        dense_output.q_probabilities,
-        general_output.q_probabilities,
-    )
-    torch.testing.assert_close(
-        dense_output.probabilities,
-        general_output.probabilities,
-    )
-    torch.testing.assert_close(
-        dense_output.sequence_state.state_s,
-        general_output.sequence_state.state_s,
-    )
-    torch.testing.assert_close(
-        dense_output.sequence_state.state_nu,
-        general_output.sequence_state.state_nu,
-    )
-
-    dense_loss = (
-        dense_output.probabilities.square().mean()
-        + dense_output.q_probabilities.square().mean()
-    )
-    general_loss = (
-        general_output.probabilities.square().mean()
-        + general_output.q_probabilities.square().mean()
-    )
-    dense_loss.backward()
-    general_loss.backward()
-    torch.testing.assert_close(hidden_dense.grad, hidden_general.grad)
-    for (dense_name, dense_parameter), (general_name, general_parameter) in zip(
-        dense.named_parameters(),
-        general.named_parameters(),
-    ):
-        assert dense_name == general_name
-        assert dense_parameter.grad is not None
-        assert general_parameter.grad is not None
-        torch.testing.assert_close(dense_parameter.grad, general_parameter.grad)
-
-
-def test_router_is_causal_and_batch_rows_are_isolated(tiny_config) -> None:
-    torch.manual_seed(402)
-    router = CPTRouter(tiny_config, layer_index=0).eval()
-    hidden_states = torch.randn(2, 6, tiny_config.hidden_size)
-
-    with torch.no_grad():
-        full = router(hidden_states)
-        prefix = router(hidden_states[:, :4])
-        row_zero = router(hidden_states[0:1])
-        row_one = router(hidden_states[1:2])
-
-    full_rows = full.probabilities.reshape(
-        2,
-        6,
-        tiny_config.num_local_experts,
-    )
-    prefix_rows = prefix.probabilities.reshape(
-        2,
-        4,
-        tiny_config.num_local_experts,
-    )
-    torch.testing.assert_close(full_rows[:, :4], prefix_rows)
-    torch.testing.assert_close(full_rows[0], row_zero.probabilities)
-    torch.testing.assert_close(full_rows[1], row_one.probabilities)
-
-    changed_future = hidden_states.clone()
-    changed_future[:, 4:] = 1000.0 * torch.randn_like(changed_future[:, 4:])
-    with torch.no_grad():
-        changed = router(changed_future).probabilities.reshape_as(full_rows)
-    torch.testing.assert_close(changed[:, :4], full_rows[:, :4])
-
-
-def test_padding_all_padding_and_explicit_reset_semantics(tiny_config) -> None:
-    torch.manual_seed(403)
-    router = CPTRouter(tiny_config, layer_index=0).eval()
-    valid_text = torch.randn(1, 4, tiny_config.hidden_size)
-    invalid_prefix = 500.0 * torch.randn(1, 2, tiny_config.hidden_size)
-    padded = torch.cat((invalid_prefix, valid_text), dim=1)
-    padded_mask = torch.tensor([[False, False, True, True, True, True]])
-
-    with torch.no_grad():
-        direct = router(valid_text)
-        padded_output = router(padded, route_valid_mask=padded_mask)
-
-    torch.testing.assert_close(padded_output.q_probabilities, direct.q_probabilities)
-    torch.testing.assert_close(padded_output.probabilities, direct.probabilities)
     torch.testing.assert_close(
         padded_output.proposal.load_sum,
-        direct.proposal.load_sum,
+        plain_output.proposal.load_sum,
+        atol=2e-6,
+        rtol=2e-6,
     )
-    assert padded_output.flat_valid_indices.tolist() == [2, 3, 4, 5]
-
-    all_padding_mask = torch.zeros(2, 3, dtype=torch.bool)
-    with torch.no_grad():
-        all_padding = router(
-            torch.randn(2, 3, tiny_config.hidden_size),
-            route_valid_mask=all_padding_mask,
-        )
-    assert all_padding.probabilities.shape == (
-        0,
-        tiny_config.num_local_experts,
-    )
-    assert all_padding.q_probabilities.shape == (
-        0,
-        tiny_config.cpt_num_prototypes,
-    )
-    assert all_padding.flat_valid_indices.numel() == 0
-    assert all_padding.proposal.token_count.item() == 0
-    assert all_padding.proposal.valid.item()
-    torch.testing.assert_close(
-        all_padding.proposal.load_sum,
-        torch.zeros(tiny_config.num_local_experts),
-    )
-
-    two_segments = torch.randn(1, 6, tiny_config.hidden_size)
-    explicit_reset = torch.tensor(
-        [[True, False, False, True, False, False]],
-        dtype=torch.bool,
-    )
-    with torch.no_grad():
-        combined = router(two_segments, reset_mask=explicit_reset)
-        second_segment = router(two_segments[:, 3:])
-    torch.testing.assert_close(
-        combined.q_probabilities[3:],
-        second_segment.q_probabilities,
-    )
-    torch.testing.assert_close(
-        combined.probabilities[3:],
-        second_segment.probabilities,
-    )
-
-    with pytest.raises(ValueError, match="cannot mark an invalid"):
-        router(
-            padded,
-            route_valid_mask=padded_mask,
-            reset_mask=torch.tensor(
-                [[True, False, False, False, False, False]],
-            ),
-        )
+    assert int(padded_output.proposal.token_count) == 3
 
 
-def test_router_gradients_preserve_main_path_and_exclude_lambda(tiny_config) -> None:
-    torch.manual_seed(404)
-    router = CPTRouter(tiny_config, layer_index=0).train()
-    hidden_states = torch.randn(2, 5, tiny_config.hidden_size)
-    output = router(hidden_states)
-    output.probabilities.retain_grad()
-    output.q_probabilities.retain_grad()
-    output.expert_kernel.retain_grad()
-    coefficients = torch.randn_like(output.probabilities)
+def test_padding_nan_hidden_has_zero_gradient_and_detached_proposal():
+    torch.manual_seed(13)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    mask = torch.tensor([[1, 0, 1, 0]], dtype=torch.bool)
+    hidden = torch.randn(1, 4, router.hidden_size)
+    hidden[~mask] = float("nan")
+    hidden.requires_grad_()
 
-    loss = (output.probabilities * coefficients).sum()
+    output = router(hidden, mask)
+    assert torch.isfinite(output.probabilities).all()
+    assert torch.equal(
+        output.probabilities[~mask],
+        torch.zeros_like(output.probabilities[~mask]),
+    )
+    for value in (
+        output.proposal.load_sum,
+        output.proposal.token_count,
+        output.proposal.state_version,
+    ):
+        assert not value.requires_grad
+
+    expert_weights = torch.tensor([0.3, -0.8, 1.1])
+    (output.probabilities[mask] * expert_weights).sum().backward()
+    assert torch.equal(hidden.grad[~mask], torch.zeros_like(hidden.grad[~mask]))
+    assert torch.isfinite(hidden.grad[mask]).all()
+    assert float(hidden.grad[mask].abs().sum()) > 0
+
+
+def test_later_token_router_loss_has_no_cross_token_bptt():
+    torch.manual_seed(17)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    hidden = torch.randn(1, 4, router.hidden_size, requires_grad=True)
+    output = router(hidden)
+    expert_weights = torch.tensor([0.25, -0.75, 1.25])
+    (output.probabilities[:, -1] * expert_weights).sum().backward()
+
+    assert torch.equal(hidden.grad[:, :-1], torch.zeros_like(hidden.grad[:, :-1]))
+    assert torch.isfinite(hidden.grad[:, -1]).all()
+    assert float(hidden.grad[:, -1].abs().sum()) > 0
+
+
+def test_batch_rows_are_independent_and_router_is_causal():
+    torch.manual_seed(19)
+    router = CPTRouter(tiny_config(), layer_index=1)
+    hidden = torch.randn(2, 5, router.hidden_size)
+    batched = router(hidden).probabilities
+    separate = torch.cat(
+        [
+            router(hidden[index : index + 1]).probabilities
+            for index in range(hidden.shape[0])
+        ]
+    )
+    torch.testing.assert_close(batched, separate, atol=2e-6, rtol=2e-6)
+
+    changed = hidden.clone()
+    changed[:, 3:] = torch.randn_like(changed[:, 3:]) * 50
+    changed_output = router(changed).probabilities
+    torch.testing.assert_close(batched[:, :3], changed_output[:, :3], atol=0, rtol=0)
+
+
+def test_main_task_gradients_reach_hidden_projection_anchors_and_energy():
+    torch.manual_seed(23)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    hidden = torch.randn(2, 4, router.hidden_size, requires_grad=True)
+    probabilities = router(hidden).probabilities
+    expert_weights = torch.tensor([0.2, -0.7, 1.3])
+    loss = (probabilities * expert_weights).sum()
     loss.backward()
 
-    for parameter in (router.projection, router.anchors, router.energy):
-        assert parameter.grad is not None
-        assert torch.isfinite(parameter.grad).all()
-        assert parameter.grad.float().norm() > 0
-    for tensor in (
-        output.probabilities,
-        output.q_probabilities,
-        output.expert_kernel,
-    ):
+    for tensor in (hidden, router.projection, router.anchors, router.energy):
         assert tensor.grad is not None
         assert torch.isfinite(tensor.grad).all()
-        assert tensor.grad.float().norm() > 0
-
-    assert not router.congestion_price.requires_grad
+        assert float(tensor.grad.abs().sum()) > 0
     assert router.congestion_price.grad is None
     assert "congestion_price" not in dict(router.named_parameters())
-    assert not output.proposal.load_sum.requires_grad
-    assert not output.proposal.token_count.requires_grad
-    assert not output.proposal.state_version.requires_grad
-    assert not output.proposal.valid.requires_grad
 
 
-def test_router_forward_is_pure_and_repeatable(tiny_config) -> None:
-    torch.manual_seed(405)
-    router = CPTRouter(tiny_config, layer_index=0).train()
-    hidden_states = torch.randn(2, 5, tiny_config.hidden_size)
-    before = {
-        name: value.detach().clone()
-        for name, value in router.state_dict().items()
-    }
+def test_sparse_moe_top2_consumes_cpt_probabilities_directly(monkeypatch):
+    torch.manual_seed(29)
+    moe = SparseMoE(tiny_config(), layer_index=0)
+    hidden = torch.randn(2, 3, moe.hidden_size)
+    expected = moe.cpt_router(hidden).probabilities.reshape(-1, moe.num_experts)
+    captured = []
+    original_topk = torch.topk
 
-    first = router(hidden_states)
-    second = router(hidden_states)
+    def recording_topk(input_tensor, *args, **kwargs):
+        captured.append(input_tensor.detach().float())
+        return original_topk(input_tensor, *args, **kwargs)
 
-    torch.testing.assert_close(first.q_probabilities, second.q_probabilities)
-    torch.testing.assert_close(first.expert_kernel, second.expert_kernel)
-    torch.testing.assert_close(first.probabilities, second.probabilities)
-    torch.testing.assert_close(first.proposal.load_sum, second.proposal.load_sum)
-    assert first.proposal.token_count.item() == second.proposal.token_count.item()
-    assert first.proposal.state_version.item() == 0
-    assert second.proposal.state_version.item() == 0
-
-    after = router.state_dict()
-    assert before.keys() == after.keys()
-    for name, previous in before.items():
-        torch.testing.assert_close(previous, after[name])
+    monkeypatch.setattr(torch, "topk", recording_topk)
+    moe(hidden)
+    assert len(captured) == 1
+    torch.testing.assert_close(captured[0], expected, atol=0, rtol=0)
 
 
-def test_model_bfloat16_conversion_keeps_all_cpt_state_fp32(tiny_config) -> None:
-    model = TinyMixtralForCausalLM(tiny_config)
-    original = {
-        (layer_index, name): getattr(layer.moe.cpt_router, name).detach().clone()
-        for layer_index, layer in enumerate(model.layers)
-        for name in ("projection", "anchors", "energy")
-    }
-    identities = {
-        (layer_index, name): id(getattr(layer.moe.cpt_router, name))
-        for layer_index, layer in enumerate(model.layers)
-        for name in ("projection", "anchors", "energy")
-    }
-    model = model.to(dtype=torch.bfloat16)
+def test_native_model_keeps_upstream_interfaces_and_zero_aux_loss():
+    torch.manual_seed(31)
+    model = TinyMixtralForCausalLM(tiny_config())
+    input_ids = torch.randint(0, model.config.vocab_size, (2, 6))
+    labels = torch.randint(0, model.config.vocab_size, (2, 6))
+    output = model(input_ids, labels=labels)
+    ce = F.cross_entropy(
+        output["logits"].reshape(-1, model.config.vocab_size), labels.reshape(-1)
+    )
+    assert output["aux_loss"].dtype == torch.float32
+    assert not output["aux_loss"].requires_grad
+    assert output["aux_loss"].item() == 0.0
+    torch.testing.assert_close(output["loss"], ce, atol=0, rtol=0)
 
-    assert model.embed_tokens.weight.dtype == torch.bfloat16
+    for coefficient in (12345.0, float("inf"), float("nan")):
+        model.config.router_aux_loss_coef = coefficient
+        output_with_arbitrary_coef = model(input_ids, labels=labels)
+        torch.testing.assert_close(
+            output_with_arbitrary_coef["loss"], ce, atol=0, rtol=0
+        )
+    assert all(not hasattr(layer.moe, "router") for layer in model.layers)
+    assert all(hasattr(layer.moe, "cpt_router") for layer in model.layers)
+
+    assert tuple(inspect.signature(GQAAttention.forward).parameters) == (
+        "self", "hidden_states", "attention_mask", "position_ids"
+    )
+    assert tuple(inspect.signature(TinyMixtralForCausalLM.forward).parameters) == (
+        "self", "input_ids", "attention_mask", "labels", "return_dict"
+    )
+
+
+def test_activation_checkpointing_matches_plain_forward_and_gradients():
+    torch.manual_seed(37)
+    plain = TinyMixtralForCausalLM(tiny_config())
+    checkpointed = TinyMixtralForCausalLM(tiny_config())
+    checkpointed.load_state_dict(plain.state_dict(), strict=True)
+    checkpointed.gradient_checkpointing_enable()
+    plain.train()
+    checkpointed.train()
+    input_ids = torch.randint(0, plain.config.vocab_size, (2, 5))
+    labels = torch.randint(0, plain.config.vocab_size, (2, 5))
+
+    plain_output = plain(input_ids, labels=labels)
+    checkpoint_output = checkpointed(input_ids, labels=labels)
+    torch.testing.assert_close(
+        checkpoint_output["logits"], plain_output["logits"], atol=0, rtol=0
+    )
+    plain_output["loss"].backward()
+    checkpoint_output["loss"].backward()
+    for plain_parameter, checkpoint_parameter in zip(
+        plain.cpt_trainable_parameters(), checkpointed.cpt_trainable_parameters()
+    ):
+        torch.testing.assert_close(
+            checkpoint_parameter.grad, plain_parameter.grad, atol=2e-6, rtol=2e-5
+        )
+    assert plain.get_cpt_state_version() == checkpointed.get_cpt_state_version() == 0
+
+
+def test_cpt_precision_island_survives_model_bfloat16_conversion():
+    model = TinyMixtralForCausalLM(tiny_config())
+    snapshots = []
     for layer_index, layer in enumerate(model.layers):
         router = layer.moe.cpt_router
-        for name in ("projection", "anchors", "energy"):
-            parameter = getattr(router, name)
-            assert parameter.dtype == torch.float32
-            assert id(parameter) == identities[(layer_index, name)]
-            assert torch.equal(parameter, original[(layer_index, name)])
+        with torch.no_grad():
+            router.congestion_price.copy_(
+                torch.linspace(
+                    0.000123 + layer_index,
+                    0.004321 + layer_index,
+                    router.num_experts,
+                )
+            )
+        for parameter in router.trainable_parameters():
+            parameter.grad = torch.randn_like(parameter)
+        snapshots.append(
+            {
+                name: value.detach().clone()
+                for name, value in (
+                    ("projection", router.projection),
+                    ("projection_grad", router.projection.grad),
+                    ("anchors", router.anchors),
+                    ("anchors_grad", router.anchors.grad),
+                    ("energy", router.energy),
+                    ("energy_grad", router.energy.grad),
+                    ("congestion_price", router.congestion_price),
+                )
+            }
+        )
+
+    model.to(torch.bfloat16)
+
+    assert model.embed_tokens.weight.dtype == torch.bfloat16
+    for layer, snapshot in zip(model.layers, snapshots):
+        router = layer.moe.cpt_router
+        assert router.projection.dtype == torch.float32
+        assert router.anchors.dtype == torch.float32
+        assert router.energy.dtype == torch.float32
         assert router.congestion_price.dtype == torch.float32
         assert router.state_version.dtype == torch.int64
-        state = router.state_dict()
-        assert state["projection"].dtype == torch.float32
-        assert state["anchors"].dtype == torch.float32
-        assert state["energy"].dtype == torch.float32
-        assert state["congestion_price"].dtype == torch.float32
-        assert state["state_version"].dtype == torch.int64
-
-
-def test_layer_specific_initialization_is_deterministic_but_independent(
-    tiny_config,
-) -> None:
-    first = CPTRouter(tiny_config, layer_index=0)
-    repeated = CPTRouter(tiny_config, layer_index=0)
-    second_layer = CPTRouter(tiny_config, layer_index=1)
-
-    torch.testing.assert_close(first.projection, repeated.projection)
-    torch.testing.assert_close(first.anchors, repeated.anchors)
-    torch.testing.assert_close(first.energy, repeated.energy)
-    assert not torch.equal(first.projection, second_layer.projection)
-    assert not torch.equal(first.anchors, second_layer.anchors)
-    assert not torch.equal(first.energy, second_layer.energy)
-
-
-def test_router_copy_keeps_no_pending_or_sequence_local_state(tiny_config) -> None:
-    router = CPTRouter(tiny_config, layer_index=0)
-    cloned = copy.deepcopy(router)
-
-    assert set(router.state_dict()) == {
-        "projection",
-        "anchors",
-        "energy",
-        "congestion_price",
-        "state_version",
-        "router_algorithm_version",
-    }
-    assert set(cloned.state_dict()) == set(router.state_dict())
+        for name, value in (
+            ("projection", router.projection),
+            ("projection_grad", router.projection.grad),
+            ("anchors", router.anchors),
+            ("anchors_grad", router.anchors.grad),
+            ("energy", router.energy),
+            ("energy_grad", router.energy.grad),
+            ("congestion_price", router.congestion_price),
+        ):
+            assert torch.equal(value, snapshot[name])
+    model.validate_persistent_cpt_state()

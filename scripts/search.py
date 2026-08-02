@@ -13,15 +13,9 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import CPT_ROUTER_RECOMPUTE_MODES, TinyMixtralConfig
+from model.config import TinyMixtralConfig
 from model.modeling import TinyMixtralForCausalLM
-from scripts.train_utils import (
-    TRAINING_FAILURE_POLICIES,
-    TrainingFailStop,
-    execute_training_iteration,
-    make_cosine_schedule,
-    make_adamw,
-)
+from scripts.train_utils import make_cosine_schedule, make_adamw
 from transformers import AutoTokenizer
 from datasets import load_dataset
 
@@ -51,8 +45,7 @@ def load_local_data(data_dir="data/c4/tokenized", max_tokens=10_000_000):
 # ============================================================
 
 def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
-                lr, warmup_ratio, weight_decay, seed, recompute="global",
-                failure_policy="fail-stop"):
+                lr, warmup_ratio, weight_decay, aux_coef, seed):
     """训练一个 trial，返回 (model, final_loss, tokens_per_sec)。"""
     torch.manual_seed(seed)
 
@@ -65,7 +58,7 @@ def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
         num_experts_per_tok=2,
         expert_intermediate_size=int(config_dict["hidden_size"] * 8 / 3),
         max_position_embeddings=seq_len, vocab_size=32000,
-        cpt_router_recompute=recompute,
+        router_aux_loss_coef=aux_coef,
     )
 
     model = TinyMixtralForCausalLM(config)
@@ -88,30 +81,28 @@ def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
     t0 = time.time()
 
     for step in range(1, steps + 1):
-        candidate_ptr = data_ptr
-        if candidate_ptr + chunk_size > len(all_data):
-            candidate_ptr = 0
-        chunk = all_data[candidate_ptr:candidate_ptr + chunk_size].view(
-            batch_size, seq_len + 1
-        ).to("cuda")
+        if data_ptr + chunk_size > len(all_data):
+            data_ptr = 0
+        chunk = all_data[data_ptr:data_ptr + chunk_size].view(batch_size, seq_len + 1).to("cuda")
+        data_ptr += chunk_size  # advance by one full batch of raw tokens
+        total_tokens += batch_size * seq_len
 
         ids, labels = chunk[:, :-1], chunk[:, 1:]
 
-        def forward_fn():
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                return model(ids, labels=labels)
+        with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            out = model(ids, labels=labels)
+        if not torch.isfinite(out["loss"]):
+            optimizer.zero_grad(set_to_none=True)
+            raise FloatingPointError(f"Non-finite loss at search step {step}: {out['loss'].item()}")
+        out["loss"].backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if not torch.isfinite(grad_norm):
+            optimizer.zero_grad(set_to_none=True)
+            raise FloatingPointError(
+                f"Non-finite gradient norm at search step {step}: {grad_norm.item()}"
+            )
+        optimizer.step(); scheduler.step(); optimizer.zero_grad()
 
-        out, _ = execute_training_iteration(
-            model,
-            optimizer,
-            scheduler,
-            forward_fn,
-            max_grad_norm=1.0,
-            failure_policy=failure_policy,
-        )
-
-        data_ptr = candidate_ptr + chunk_size
-        total_tokens += batch_size * seq_len
         losses.append(out["loss"].item())
 
     elapsed = time.time() - t0
@@ -178,10 +169,6 @@ def eval_trial(model, tokenizer, tasks, limit, batch_size, max_length):
 # ============================================================
 
 def generate_trials(n):
-    if isinstance(n, bool) or not isinstance(n, int):
-        raise TypeError("trial count must be an integer")
-    if n <= 0:
-        raise ValueError("trial count must be positive")
     """生成搜索网格。"""
     # 架构搜索
     archs = [
@@ -193,13 +180,14 @@ def generate_trials(n):
     ]
     # 训练超参
     train_hparams = [
-        {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.1},
-        {"lr": 5e-4, "warmup_ratio": 0.1, "weight_decay": 0.1},
-        {"lr": 1e-4, "warmup_ratio": 0.1, "weight_decay": 0.1},
-        {"lr": 3e-4, "warmup_ratio": 0.2, "weight_decay": 0.1},
-        {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.05},
-        {"lr": 3e-4, "warmup_ratio": 0.05, "weight_decay": 0.1},
-        {"lr": 2e-4, "warmup_ratio": 0.15, "weight_decay": 0.08},
+        {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.1, "aux_coef": 0.01},
+        {"lr": 5e-4, "warmup_ratio": 0.1, "weight_decay": 0.1, "aux_coef": 0.01},
+        {"lr": 1e-4, "warmup_ratio": 0.1, "weight_decay": 0.1, "aux_coef": 0.01},
+        {"lr": 3e-4, "warmup_ratio": 0.2, "weight_decay": 0.1, "aux_coef": 0.01},
+        {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.05, "aux_coef": 0.01},
+        {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.1, "aux_coef": 0.05},
+        {"lr": 3e-4, "warmup_ratio": 0.05,"weight_decay": 0.1, "aux_coef": 0.01},
+        {"lr": 2e-4, "warmup_ratio": 0.15,"weight_decay": 0.08,"aux_coef": 0.02},
     ]
 
     trials = []
@@ -208,7 +196,7 @@ def generate_trials(n):
             trials.append({**arch, **hp})
     for arch in archs[3:]:  # 大架构用保守超参
         trials.append({**arch, "lr": 3e-4, "warmup_ratio": 0.1,
-                       "weight_decay": 0.1})
+                       "weight_decay": 0.1, "aux_coef": 0.01})
 
     if n < len(trials):
         return trials[:n]
@@ -235,36 +223,12 @@ def main():
     p.add_argument("--max-data-tokens", type=int, default=10_000_000,
                    help="搜索时最多载入内存的 token 数")
     p.add_argument("--seed", type=int, default=1234)
-    p.add_argument(
-        "--recompute",
-        choices=CPT_ROUTER_RECOMPUTE_MODES,
-        default="global",
-        help="MoE Router recompute policy for every trial",
-    )
-    p.add_argument(
-        "--failure-policy",
-        choices=TRAINING_FAILURE_POLICIES,
-        default="fail-stop",
-        help="Use fail-stop for production-like trials or exact-rollback for debugging",
-    )
     args = p.parse_args()
-    positive_controls = (
-        ("trials", args.trials),
-        ("steps-per-trial", args.steps_per_trial),
-        ("batch-size", args.batch_size),
-        ("seq-len", args.seq_len),
-        ("eval-limit", args.eval_limit),
-        ("eval-batch", args.eval_batch),
-        ("max-data-tokens", args.max_data_tokens),
-    )
-    for name, value in positive_controls:
-        if value <= 0:
-            p.error(f"{name} must be positive")
-    tasks = [task.strip() for task in args.tasks.split(",") if task.strip()]
-    if not tasks:
-        p.error("tasks must contain at least one task")
+    if args.max_data_tokens <= 0:
+        p.error("max-data-tokens must be positive")
 
     os.makedirs(args.output_dir, exist_ok=True)
+    tasks = [t.strip() for t in args.tasks.split(",")]
 
     # 一次性加载数据和 tokenizer
     print("Loading data...")
@@ -283,8 +247,7 @@ def main():
     print(f"Eval: {tasks} × {args.eval_limit} examples each\n")
 
     csv_path = Path(args.output_dir) / "results.csv"
-    fieldnames = ["trial", "hs", "layers", "experts", "lr", "warmup", "wd",
-                  "cpt_router_recompute",
+    fieldnames = ["trial", "hs", "layers", "experts", "lr", "warmup", "wd", "aux",
                   "train_loss", "tok_s", "gpu_gb",
                   "sst2", "mrpc_acc", "mrpc_f1", "qnli", "rte", "cola",
                   "mean_score", "time_s"]
@@ -298,7 +261,7 @@ def main():
     for i, hp in enumerate(trials):
         t0 = time.time()
         print(f"[Trial {i+1}/{len(trials)}] {hp['hidden_size']}d/{hp['num_layers']}L/"
-              f"{hp['num_experts']}E lr={hp['lr']:.0e} wd={hp['weight_decay']}")
+              f"{hp['num_experts']}E lr={hp['lr']:.0e} wd={hp['weight_decay']} aux={hp['aux_coef']}")
 
         # Train
         torch.manual_seed(args.seed + i)
@@ -306,12 +269,9 @@ def main():
             model, train_loss, tok_s = train_trial(
                 hp, all_data, tokenizer, args.steps_per_trial,
                 args.batch_size, args.seq_len,
-                hp["lr"], hp["warmup_ratio"], hp["weight_decay"],
-                args.seed + i,
-                recompute=args.recompute,
-                failure_policy=args.failure_policy,
-            )
-        except (torch.cuda.OutOfMemoryError, FloatingPointError, TrainingFailStop):
+                hp["lr"], hp["warmup_ratio"], hp["weight_decay"], hp["aux_coef"],
+                args.seed + i)
+        except (torch.cuda.OutOfMemoryError, FloatingPointError):
             print(f"  Failed! Skipping.")
             torch.cuda.empty_cache()
             continue
@@ -329,7 +289,6 @@ def main():
             model.eval()
             eval_results, mean_score = eval_trial(
                 model, tokenizer, tasks, args.eval_limit, args.eval_batch, 256)
-        effective_recompute = model.config.cpt_router_recompute
         del model; gc.collect(); torch.cuda.empty_cache()
 
         elapsed = time.time() - t0
@@ -337,8 +296,7 @@ def main():
         row = {
             "trial": i, "hs": hp["hidden_size"], "layers": hp["num_layers"],
             "experts": hp["num_experts"], "lr": hp["lr"], "warmup": hp["warmup_ratio"],
-            "wd": hp["weight_decay"],
-            "cpt_router_recompute": effective_recompute,
+            "wd": hp["weight_decay"], "aux": hp["aux_coef"],
             "train_loss": round(train_loss, 4), "tok_s": round(tok_s, 0),
             "gpu_gb": round(peak_gb, 1), "mean_score": mean_score, "time_s": round(elapsed, 1),
         }
@@ -361,12 +319,7 @@ def main():
         selection_score = -train_loss if args.skip_eval else mean_score
         if selection_score > best_score:
             best_score = selection_score
-            best_trial = {
-                **hp,
-                "cpt_router_recompute": row["cpt_router_recompute"],
-                "mean_score": mean_score,
-                "train_loss": row["train_loss"],
-            }
+            best_trial = {**hp, "mean_score": mean_score, "train_loss": row["train_loss"]}
             print(f"  ★ NEW BEST!")
 
         print()

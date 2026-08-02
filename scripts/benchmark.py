@@ -18,13 +18,9 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import CPT_ROUTER_RECOMPUTE_MODES, TinyMixtralConfig
+from model.config import TinyMixtralConfig
 from model.modeling import TinyMixtralForCausalLM
-from scripts.train_utils import (
-    TRAINING_FAILURE_POLICIES,
-    execute_training_iteration,
-    make_adamw,
-)
+from scripts.train_utils import make_adamw
 
 
 def get_gpu_info():
@@ -51,22 +47,11 @@ def get_gpu_util():
         return -1, -1
 
 
-def test_config(
-    hs,
-    nl,
-    ne,
-    bs,
-    sl,
-    steps=5,
-    recompute="global",
-    failure_policy="fail-stop",
-):
+def test_config(hs, nl, ne, bs, sl, steps=5):
     """测试一个配置：返回 (ok, peak_gb, avg_step_ms, avg_gpu_util%, params_M)。"""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
-    activation_checkpointing = False
-    effective_recompute = recompute
 
     n_heads = hs // 64
     n_kv = max(2, n_heads // 4)
@@ -81,12 +66,9 @@ def test_config(
             num_attention_heads=n_heads, num_key_value_heads=n_kv, head_dim=64,
             num_local_experts=ne, num_experts_per_tok=min(2, ne),
             expert_intermediate_size=int(hs * 8//3), max_position_embeddings=sl, vocab_size=32000,
-            cpt_router_recompute=recompute,
         )
         model = TinyMixtralForCausalLM(config)
         model.gradient_checkpointing_enable()
-        activation_checkpointing = bool(model._use_activation_checkpointing)
-        effective_recompute = model.config.cpt_router_recompute
         model = model.to("cuda").to(torch.bfloat16)
         nM = sum(p.numel() for p in model.parameters()) / 1e6
 
@@ -95,18 +77,11 @@ def test_config(
 
         # Warmup
         for _ in range(2):
-            def forward_fn():
-                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                    return model(x[:, :-1], labels=x[:, 1:])
-
-            out, _ = execute_training_iteration(
-                model,
-                optimizer,
-                scheduler=None,
-                forward_fn=forward_fn,
-                max_grad_norm=1.0,
-                failure_policy=failure_policy,
-            )
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                out = model(x[:, :-1], labels=x[:, 1:])
+            out["loss"].backward()
+            optimizer.step()
+            optimizer.zero_grad()
 
         # 测量：记录每步时间和利用率
         torch.cuda.synchronize()
@@ -119,18 +94,11 @@ def test_config(
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
-            def forward_fn():
-                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                    return model(x[:, :-1], labels=x[:, 1:])
-
-            out, _ = execute_training_iteration(
-                model,
-                optimizer,
-                scheduler=None,
-                forward_fn=forward_fn,
-                max_grad_norm=1.0,
-                failure_policy=failure_policy,
-            )
+            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                out = model(x[:, :-1], labels=x[:, 1:])
+            out["loss"].backward()
+            optimizer.step()
+            optimizer.zero_grad()
 
             torch.cuda.synchronize()
             t1 = time.perf_counter()
@@ -145,6 +113,7 @@ def test_config(
 
         total_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         mem_pct = peak_gb / total_mem * 100
+
         del model, optimizer, x, out
         gc.collect()
         torch.cuda.empty_cache()
@@ -153,8 +122,6 @@ def test_config(
             "ok": True,
             "hidden_size": hs, "num_layers": nl, "num_experts": ne,
             "batch_size": bs, "seq_len": sl,
-            "activation_checkpointing": activation_checkpointing,
-            "cpt_router_recompute": effective_recompute,
             "params_M": round(nM, 1),
             "peak_memory_gb": round(peak_gb, 2),
             "memory_pct": round(mem_pct, 1),
@@ -167,17 +134,12 @@ def test_config(
         gc.collect()
         torch.cuda.empty_cache()
         return {"ok": False, "hidden_size": hs, "num_layers": nl, "num_experts": ne,
-                "batch_size": bs, "seq_len": sl,
-                "activation_checkpointing": activation_checkpointing,
-                "cpt_router_recompute": effective_recompute}
+                "batch_size": bs, "seq_len": sl}
     except Exception as e:
         gc.collect()
         torch.cuda.empty_cache()
         return {"ok": False, "hidden_size": hs, "num_layers": nl, "num_experts": ne,
-                "batch_size": bs, "seq_len": sl,
-                "activation_checkpointing": activation_checkpointing,
-                "cpt_router_recompute": effective_recompute,
-                "error": str(e)[:80]}
+                "batch_size": bs, "seq_len": sl, "error": str(e)[:80]}
 
 
 def compute_score(r, gpu_info):
@@ -194,12 +156,7 @@ def compute_score(r, gpu_info):
     return round(params_score * 0.3 + speed_score * 0.25 + util_score * 0.25 + mem_score * 0.2, 4)
 
 
-def run_benchmark(
-    output_path,
-    quick=False,
-    recompute="global",
-    failure_policy="fail-stop",
-):
+def run_benchmark(output_path, quick=False):
     gpu_info = get_gpu_info()
     total_gb = gpu_info["total_memory_gb"]
     target_gb = total_gb - 2.0
@@ -208,8 +165,6 @@ def run_benchmark(
     print("TinyMixtral Hardware Benchmark")
     print(f"GPU: {gpu_info['name']} ({total_gb:.1f}GB)")
     print(f"Target: <{target_gb:.1f}GB (留2GB), bf16 + AdamW + act_ckpt")
-    print(f"Router recompute: {recompute}")
-    print(f"Training failure policy: {failure_policy}")
     print("=" * 65)
 
     # 搜索网格
@@ -241,15 +196,7 @@ def run_benchmark(
             for ne in expert_counts:
                 for bs in batch_sizes:
                     tested += 1
-                    r = test_config(
-                        hs,
-                        nl,
-                        ne,
-                        bs,
-                        seq_len,
-                        recompute=recompute,
-                        failure_policy=failure_policy,
-                    )
+                    r = test_config(hs, nl, ne, bs, seq_len)
 
                     if r["ok"] and r["peak_memory_gb"] < target_gb:
                         r["score"] = compute_score(r, gpu_info)
@@ -265,15 +212,7 @@ def run_benchmark(
 
     if not results:
         print("No config found! Running minimal fallback...")
-        r = test_config(
-            512,
-            6,
-            4,
-            2,
-            1024,
-            recompute=recompute,
-            failure_policy=failure_policy,
-        )
+        r = test_config(512, 6, 4, 2, 1024)
         if r["ok"]:
             r["score"] = 0
             results = [r]
@@ -297,9 +236,7 @@ def run_benchmark(
             "seq_len": seq_len,
             "precision": "bf16",
             "optimizer": "AdamW",
-            "activation_checkpointing": best["activation_checkpointing"],
-            "cpt_router_recompute": best["cpt_router_recompute"],
-            "training_failure_policy": failure_policy,
+            "activation_checkpointing": True,
             "target_memory_gb": round(target_gb, 1),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         },
@@ -335,20 +272,8 @@ def main():
     p = argparse.ArgumentParser(description="TinyMixtral Hardware Benchmark")
     p.add_argument("--output", default="configs/hardware_profile.json")
     p.add_argument("--quick", action="store_true", help="快速模式（更小的搜索网格）")
-    p.add_argument(
-        "--recompute",
-        choices=CPT_ROUTER_RECOMPUTE_MODES,
-        default="global",
-        help="MoE Router recompute policy for every benchmark case",
-    )
-    p.add_argument(
-        "--failure-policy",
-        choices=TRAINING_FAILURE_POLICIES,
-        default="fail-stop",
-        help="Failure recovery policy used by every measured training step",
-    )
     args = p.parse_args()
-    run_benchmark(args.output, args.quick, args.recompute, args.failure_policy)
+    run_benchmark(args.output, args.quick)
 
 
 if __name__ == "__main__":
