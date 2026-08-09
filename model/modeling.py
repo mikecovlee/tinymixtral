@@ -212,14 +212,14 @@ class SparseMoE(nn.Module):
         """
         B, S, D = x.shape
         x_flat = x.view(-1, D)  # [B*S, D]
-        num_tokens = B * S
+        N = B * S
 
         router_output = self.cpt_router(x, route_valid_mask=route_valid_mask)
         # CPT already returns final expert probabilities Pi^T = Q^T B.
         # There is no post-Pi softmax; upstream Top-2 consumes them directly.
         all_routing_weights = router_output.probabilities.view(-1, self.num_experts)
         if route_valid_mask is None:
-            valid_token_idx = torch.arange(num_tokens, device=x.device)
+            valid_token_idx = torch.arange(N, device=x.device)
         else:
             valid_token_idx = torch.nonzero(
                 route_valid_mask.to(device=x.device, dtype=torch.bool).reshape(-1),
@@ -253,12 +253,9 @@ class SparseMoE(nn.Module):
         sorted_weights = flat_weights[sorted_indices]
         sorted_experts = flat_experts[sorted_indices]
 
-        expert_counts = torch.bincount(
-            sorted_experts,
-            minlength=self.num_experts,
-        ).tolist()
+        expert_counts = torch.bincount(sorted_experts, minlength=self.num_experts).tolist()
 
-        final_out = torch.zeros(num_tokens, D, device=x.device, dtype=x.dtype)
+        final_out = torch.zeros(N, D, device=x.device, dtype=x.dtype)
         start = 0
         for e in range(self.num_experts):
             count = expert_counts[e]
@@ -273,11 +270,7 @@ class SparseMoE(nn.Module):
             up = torch.matmul(token_states, self.up_proj[e].T)
             expert_out = torch.matmul(gate * up, self.down_proj[e].T)
 
-            final_out.index_add_(
-                0,
-                idx,
-                (expert_out * w.unsqueeze(-1)).to(x.dtype),
-            )
+            final_out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
             start = end
 
         proposal = router_output.proposal
@@ -744,11 +737,7 @@ class TinyMixtralForCausalLM(nn.Module):
         torch.save(state_dict, f"{path}/pytorch_model.bin")
 
     @classmethod
-    def from_pretrained(
-        cls,
-        path: str,
-        config: Optional[TinyMixtralConfig] = None,
-    ) -> "TinyMixtralForCausalLM":
+    def from_pretrained(cls, path: str, config: Optional[TinyMixtralConfig] = None) -> "TinyMixtralForCausalLM":
         """从 HF 格式加载模型。"""
         import json
 
@@ -823,11 +812,7 @@ class TinyMixtralForCausalLM(nn.Module):
                     "config.json"
                 )
         model = cls(config)
-        state_dict = torch.load(
-            f"{path}/pytorch_model.bin",
-            map_location="cpu",
-            weights_only=True,
-        )
+        state_dict = torch.load(f"{path}/pytorch_model.bin", map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict, strict=True)
         return model
 

@@ -201,10 +201,7 @@ def main():
     bs, seq = args.batch_size, args.seq_len
     chunk = (seq + 1) * bs
 
-    opt = make_adamw(
-        model, lr=args.lr, weight_decay=args.wd,
-        bf16_states=args.bf16_optim,
-    )
+    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd, bf16_states=args.bf16_optim)
 
     state_path = latest / "training_state.pt"
     total_tok = step_done * bs * seq
@@ -223,7 +220,7 @@ def main():
         if "step" in state:
             step_done = state["step"]
         total_tok = state.get("total_tok", total_tok)
-        print("Loaded optimizer+scheduler state", flush=True)
+        print(f"Loaded optimizer+scheduler state", flush=True)
 
         saved_bs = state.get("batch_size")
         saved_seq = state.get("seq_len")

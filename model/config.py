@@ -91,7 +91,7 @@ class TinyMixtralConfig:
     # 初始化
     initializer_range: float = 0.02
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         for name in CPT_ROUTING_ARCHITECTURE_FIELDS:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
