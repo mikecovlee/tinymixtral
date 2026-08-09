@@ -67,6 +67,7 @@ class TinyMixtralConfig:
     cpt_expert_temperature: float = 1.0
     cpt_state_step_size: Optional[float] = None
     cpt_state_radius: float = 1.0
+    cpt_state_chunk_size: int = 32
     cpt_eps_z: float = 1e-6
     cpt_eps_m: float = 1e-6
     cpt_eps_init: float = 1e-8
@@ -143,6 +144,12 @@ class TinyMixtralConfig:
             or self.cpt_init_seed < 0
         ):
             raise ValueError("cpt_init_seed must be a non-negative integer")
+        if (
+            isinstance(self.cpt_state_chunk_size, bool)
+            or not isinstance(self.cpt_state_chunk_size, int)
+            or self.cpt_state_chunk_size <= 0
+        ):
+            raise ValueError("cpt_state_chunk_size must be a positive integer")
         max_layer_seed = self.cpt_init_seed + 104_729 * (
             self.num_hidden_layers - 1
         )

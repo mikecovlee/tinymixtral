@@ -22,6 +22,7 @@ def tiny_config(**overrides):
         "num_experts_per_tok": 2,
         "expert_intermediate_size": 16,
         "cpt_projection_dim": 4,
+        "cpt_state_chunk_size": 1,
         "cpt_init_seed": 17,
     }
     values.update(overrides)
@@ -133,6 +134,9 @@ def test_config_derives_k_and_authoritative_defaults():
         ({"num_local_experts": 3.0}, "positive integer"),
         ({"num_local_experts": True}, "positive integer"),
         ({"num_experts_per_tok": 1}, "must remain 2"),
+        ({"cpt_state_chunk_size": 0}, "positive integer"),
+        ({"cpt_state_chunk_size": True}, "positive integer"),
+        ({"cpt_state_chunk_size": 2.0}, "positive integer"),
     ],
 )
 def test_config_rejects_invalid_cpt_contract(updates, message):
@@ -191,6 +195,76 @@ def test_token_major_forward_matches_column_vector_oracle(seed):
         actual[mask].sum(dim=-1), torch.ones(int(mask.sum())), atol=2e-6, rtol=0
     )
     assert torch.equal(actual[~mask], torch.zeros_like(actual[~mask]))
+
+
+def test_one_chunk_routes_tokens_in_parallel_from_the_entry_state():
+    torch.manual_seed(19)
+    router = CPTRouter(tiny_config(cpt_state_chunk_size=8), layer_index=0)
+    hidden = torch.randn(2, 6, router.hidden_size)
+    mask = torch.tensor([[1, 1, 0, 1, 1, 0], [0, 1, 1, 0, 1, 1]], dtype=torch.bool)
+
+    actual = router(hidden, mask).probabilities
+    expected = torch.zeros_like(actual)
+    for batch_index, position in mask.nonzero().tolist():
+        expected[batch_index, position] = router(
+            hidden[batch_index : batch_index + 1, position : position + 1]
+        ).probabilities[0, 0]
+
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_chunk_state_changes_only_later_chunks():
+    torch.manual_seed(23)
+    router = CPTRouter(tiny_config(cpt_state_chunk_size=2), layer_index=0)
+    hidden = torch.randn(1, 4, router.hidden_size)
+    changed = hidden.clone()
+    changed[:, 0] = changed[:, 0] * -7.0 + 3.0
+
+    original_probabilities = router(hidden).probabilities
+    changed_probabilities = router(changed).probabilities
+
+    torch.testing.assert_close(
+        original_probabilities[:, 1],
+        changed_probabilities[:, 1],
+        atol=2e-6,
+        rtol=2e-6,
+    )
+    assert not torch.allclose(
+        original_probabilities[:, 2:],
+        changed_probabilities[:, 2:],
+        atol=1e-7,
+        rtol=1e-7,
+    )
+
+
+def test_blockwise_router_preserves_probability_mass_padding_and_gradients():
+    torch.manual_seed(29)
+    router = CPTRouter(tiny_config(cpt_state_chunk_size=3), layer_index=0)
+    hidden = torch.randn(2, 7, router.hidden_size, requires_grad=True)
+    mask = torch.tensor(
+        [[1, 1, 0, 1, 1, 1, 0], [0, 1, 1, 0, 1, 1, 1]],
+        dtype=torch.bool,
+    )
+
+    output = router(hidden, mask)
+    torch.testing.assert_close(
+        output.probabilities[mask].sum(dim=-1),
+        torch.ones(int(mask.sum())),
+        atol=2e-6,
+        rtol=0,
+    )
+    assert torch.equal(
+        output.probabilities[~mask],
+        torch.zeros_like(output.probabilities[~mask]),
+    )
+
+    output.probabilities.square().sum().backward()
+    assert hidden.grad is not None
+    assert torch.isfinite(hidden.grad).all()
+    assert torch.equal(hidden.grad[~mask], torch.zeros_like(hidden.grad[~mask]))
+    for parameter in router.trainable_parameters():
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
 
 
 @pytest.mark.parametrize("scale", [0.0, 1e-12, 1.0, 1e6])

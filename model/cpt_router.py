@@ -1,7 +1,7 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 
-"""Native CPT-MoE probability Router (strict mathematical version 1).
+"""Native CPT-MoE probability Router with blockwise sequence state.
 
 Theory uses column vectors.  For one token ``x_t in R^{d x 1}``:
 
@@ -12,7 +12,8 @@ Theory uses column vectors.  For one token ``x_t in R^{d x 1}``:
 
 The implementation stores tokens row-major, hence the final equivalent
 operation is ``pi_t.T = q_t.T @ B``.  There is deliberately no softmax
-after this product.
+after this product. Tokens in one state chunk share its entry state and are
+routed in parallel; setting ``cpt_state_chunk_size=1`` recovers strict v1.
 """
 
 from dataclasses import dataclass
@@ -89,6 +90,7 @@ class CPTRouter(nn.Module):
         self.expert_temperature = config.cpt_expert_temperature
         self.state_step_size = config.cpt_state_step_size
         self.state_radius = config.cpt_state_radius
+        self.state_chunk_size = config.cpt_state_chunk_size
         self.eps_z = config.cpt_eps_z
         self.eps_m = config.cpt_eps_m
         self.eps_init = config.cpt_eps_init
@@ -269,7 +271,7 @@ class CPTRouter(nn.Module):
         hidden_states: torch.Tensor,
         route_valid_mask: torch.Tensor | None = None,
     ) -> CPTRouterOutput:
-        """Route ``[batch, sequence, hidden]`` states with strict CPT v1."""
+        """Route states with parallel token routing inside each state chunk."""
         if hidden_states.ndim != 3:
             raise ValueError("hidden_states must have shape [batch, sequence, hidden]")
         batch_size, sequence_length, hidden_size = hidden_states.shape
@@ -323,17 +325,13 @@ class CPTRouter(nn.Module):
                 device=hidden_states.device,
                 dtype=torch.float32,
             )
-            prototype_placeholder = torch.zeros(
-                batch_size,
-                self.num_prototypes,
-                device=hidden_states.device,
-                dtype=torch.float32,
-            )
-            prototype_probability_steps: list[torch.Tensor] = []
+            prototype_probability_chunks: list[torch.Tensor] = []
 
-            for position in range(sequence_length):
-                valid_rows = valid_mask[:, position].unsqueeze(-1)
-                z_t = projected[:, position]
+            for chunk_start in range(0, sequence_length, self.state_chunk_size):
+                chunk_end = min(chunk_start + self.state_chunk_size, sequence_length)
+                valid_chunk = valid_mask[:, chunk_start:chunk_end]
+                valid_rows = valid_chunk.any(dim=1, keepdim=True)
+                z_t = projected[:, chunk_start:chunk_end]
                 state_old = short_state
                 nu_old = responsibility
 
@@ -345,19 +343,30 @@ class CPTRouter(nn.Module):
                 )
                 prototypes = self._stable_l2(mixed, dim=1, eps=self.eps_m)
                 prototype_logits = torch.einsum(
-                    "bd,bdk->bk", z_t, prototypes
+                    "btd,bdk->btk", z_t, prototypes
                 ) / self.prototype_temperature
                 q_t = F.softmax(prototype_logits, dim=-1, dtype=torch.float32)
-                prototype_probability_steps.append(
-                    torch.where(valid_rows, q_t, prototype_placeholder)
+                q_t = torch.where(
+                    valid_chunk.unsqueeze(-1),
+                    q_t,
+                    torch.zeros_like(q_t),
                 )
+                prototype_probability_chunks.append(q_t)
 
                 with torch.no_grad():
                     q_detached = q_t.detach()
+                    valid_count = valid_chunk.sum(dim=1, dtype=torch.float32)
+                    routing_mass = q_detached.sum(dim=1)
+                    weighted_projection = torch.einsum(
+                        "btd,btk->bdk",
+                        z_t.detach(),
+                        q_detached,
+                    )
                     state_gradient = (
-                        (state_old - z_t.detach().unsqueeze(-1))
-                        * q_detached.unsqueeze(1)
+                        state_old * routing_mass.unsqueeze(1)
+                        - weighted_projection
                         + self.lambda_sa
+                        * valid_count.view(batch_size, 1, 1)
                         * (state_old - self.anchors.detach().unsqueeze(0))
                     )
                     state_candidate = state_old - self.state_step_size * state_gradient
@@ -368,7 +377,20 @@ class CPTRouter(nn.Module):
                         torch.ones_like(state_norm),
                         state_norm / self.state_radius,
                     )
-                    nu_candidate = self.rho_beta * nu_old + q_detached
+                    valid_after = (
+                        valid_chunk.to(torch.int64)
+                        .flip(dims=(1,))
+                        .cumsum(dim=1)
+                        .flip(dims=(1,))
+                        - valid_chunk.to(torch.int64)
+                    )
+                    rho = responsibility.new_tensor(self.rho_beta)
+                    decay_weights = rho.pow(valid_after).unsqueeze(-1)
+                    retained_responsibility = rho.pow(valid_count).unsqueeze(-1)
+                    nu_candidate = (
+                        retained_responsibility * nu_old
+                        + (q_detached * decay_weights).sum(dim=1)
+                    )
                     short_state = torch.where(
                         valid_rows.unsqueeze(-1), state_candidate, state_old
                     )
@@ -376,8 +398,8 @@ class CPTRouter(nn.Module):
                         valid_rows, nu_candidate, nu_old
                     )
 
-            nominal_prototype_probabilities = torch.stack(
-                prototype_probability_steps,
+            nominal_prototype_probabilities = torch.cat(
+                prototype_probability_chunks,
                 dim=1,
             )
             flat_prototype_probabilities = nominal_prototype_probabilities.reshape(
