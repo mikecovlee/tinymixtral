@@ -191,7 +191,7 @@ class SparseMoE(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        route_valid_mask: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[
         torch.Tensor,
         torch.Tensor,
@@ -202,7 +202,7 @@ class SparseMoE(nn.Module):
         """
         Args:
             x: [batch_size, seq_len, hidden_size]
-            route_valid_mask: [batch_size, seq_len], True=route, False=padding
+            attention_mask: [batch_size, seq_len], True=valid (routed), False=padding
         Returns:
             out: [batch_size, seq_len, hidden_size]
             aux_loss: FP32 scalar zero retained for interface compatibility
@@ -214,15 +214,15 @@ class SparseMoE(nn.Module):
         x_flat = x.view(-1, D)  # [B*S, D]
         N = B * S
 
-        router_output = self.cpt_router(x, route_valid_mask=route_valid_mask)
+        router_output = self.cpt_router(x, attention_mask=attention_mask)
         # CPT already returns final expert probabilities Pi^T = Q^T B.
         # There is no post-Pi softmax; upstream Top-2 consumes them directly.
         all_routing_weights = router_output.probabilities.view(-1, self.num_experts)
-        if route_valid_mask is None:
+        if attention_mask is None:
             valid_token_idx = torch.arange(N, device=x.device)
         else:
             valid_token_idx = torch.nonzero(
-                route_valid_mask.to(device=x.device, dtype=torch.bool).reshape(-1),
+                attention_mask.to(device=x.device, dtype=torch.bool).reshape(-1),
                 as_tuple=False,
             ).flatten()
         routing_weights = all_routing_weights.index_select(
@@ -319,7 +319,7 @@ class MoETransformerBlock(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states, aux_loss, load_sum, token_count, state_version = self.moe(
-            hidden_states, route_valid_mask=attention_mask
+            hidden_states, attention_mask=attention_mask
         )
         hidden_states = residual + hidden_states
 
@@ -396,11 +396,11 @@ class TinyMixtralForCausalLM(nn.Module):
         B, S = input_ids.shape
         position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
 
-        # 如果有 attention_mask，生成 causal mask 的复合 mask
-        causal_mask = None
+        # 如果有 attention_mask，就地转为 boolean（True=有效，False=pad），
+        # 供 attention 与 MoE 路由复用；causal 约束在 attention 内部合成
         if attention_mask is not None:
             # sdpa 需要 boolean mask: True = keep
-            causal_mask = attention_mask.bool()
+            attention_mask = attention_mask.bool()
 
         hidden_states = self.embed_tokens(input_ids)
         total_aux_loss = torch.tensor(0.0, device=input_ids.device, dtype=torch.float32)
@@ -417,13 +417,13 @@ class TinyMixtralForCausalLM(nn.Module):
                 ) = checkpoint(
                     layer,
                     hidden_states,
-                    causal_mask,
+                    attention_mask,
                     position_ids,
                     use_reentrant=False,
                 )
             else:
                 hidden_states, aux_loss, load_sum, token_count, state_version = layer(
-                    hidden_states, causal_mask, position_ids
+                    hidden_states, attention_mask, position_ids
                 )
             total_aux_loss = total_aux_loss + aux_loss
             layer_proposals.append(

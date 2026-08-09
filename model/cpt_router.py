@@ -269,9 +269,13 @@ class CPTRouter(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        route_valid_mask: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> CPTRouterOutput:
-        """Route states with parallel token routing inside each state chunk."""
+        """Route states with parallel token routing inside each state chunk.
+
+        ``attention_mask`` is ``[batch, sequence]`` with True marking a valid
+        (routable) token and False marking padding.
+        """
         if hidden_states.ndim != 3:
             raise ValueError("hidden_states must have shape [batch, sequence, hidden]")
         batch_size, sequence_length, hidden_size = hidden_states.shape
@@ -281,7 +285,7 @@ class CPTRouter(nn.Module):
             )
         if sequence_length <= 0:
             raise ValueError("sequence length must be positive")
-        if route_valid_mask is None:
+        if attention_mask is None:
             valid_mask = torch.ones(
                 batch_size,
                 sequence_length,
@@ -289,14 +293,14 @@ class CPTRouter(nn.Module):
                 dtype=torch.bool,
             )
         else:
-            if not isinstance(route_valid_mask, torch.Tensor):
-                raise TypeError("route_valid_mask must be a tensor")
-            if tuple(route_valid_mask.shape) != (batch_size, sequence_length):
+            if not isinstance(attention_mask, torch.Tensor):
+                raise TypeError("attention_mask must be a tensor")
+            if tuple(attention_mask.shape) != (batch_size, sequence_length):
                 raise ValueError(
-                    "route_valid_mask must have shape "
+                    "attention_mask must have shape "
                     f"{(batch_size, sequence_length)}"
                 )
-            valid_mask = route_valid_mask.to(
+            valid_mask = attention_mask.to(
                 device=hidden_states.device,
                 dtype=torch.bool,
             )
