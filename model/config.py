@@ -68,6 +68,7 @@ class TinyMixtralConfig:
     cpt_state_step_size: Optional[float] = None
     cpt_state_radius: float = 1.0
     cpt_state_chunk_size: int = 32
+    cpt_state_corrector: bool = True
     cpt_eps_z: float = 1e-6
     cpt_eps_m: float = 1e-6
     cpt_eps_init: float = 1e-8
@@ -150,6 +151,8 @@ class TinyMixtralConfig:
             or self.cpt_state_chunk_size <= 0
         ):
             raise ValueError("cpt_state_chunk_size must be a positive integer")
+        if not isinstance(self.cpt_state_corrector, bool):
+            raise ValueError("cpt_state_corrector must be a boolean")
         max_layer_seed = self.cpt_init_seed + 104_729 * (
             self.num_hidden_layers - 1
         )

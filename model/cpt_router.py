@@ -14,6 +14,14 @@ The implementation stores tokens row-major, hence the final equivalent
 operation is ``pi_t.T = q_t.T @ B``.  There is deliberately no softmax
 after this product. Tokens in one state chunk share its entry state and are
 routed in parallel; setting ``cpt_state_chunk_size=1`` recovers strict v1.
+
+With ``cpt_state_corrector=True`` an optional predictor-corrector pass
+refines the chunk probabilities: pass one routes from the entry state, then a
+first-order per-position trajectory of ``(S, nu)`` built from the pass-one
+responsibilities (exclusive prefix sums, all parallel) yields corrected
+per-position prototypes for pass two.  The trajectory correction vanishes for
+single-token chunks, so ``cpt_state_chunk_size=1`` still recovers strict v1
+exactly.  The default keeps the frozen blockwise semantics.
 """
 
 from dataclasses import dataclass
@@ -26,6 +34,11 @@ from .config import CPT_ROUTING_ARCHITECTURE_FIELDS, TinyMixtralConfig
 
 
 CPT_ROUTER_ALGORITHM_VERSION = 1
+
+# Full-forward compilation unrolls the chunk loop; compile time grows with the
+# number of chunks, so only compile when the unroll stays moderate.  Larger
+# sequences should raise ``cpt_state_chunk_size`` rather than drop to eager.
+_MAX_COMPILED_CHUNKS = 128
 
 
 @dataclass(frozen=True)
@@ -91,6 +104,7 @@ class CPTRouter(nn.Module):
         self.state_step_size = config.cpt_state_step_size
         self.state_radius = config.cpt_state_radius
         self.state_chunk_size = config.cpt_state_chunk_size
+        self.state_corrector = config.cpt_state_corrector
         self.eps_z = config.cpt_eps_z
         self.eps_m = config.cpt_eps_m
         self.eps_init = config.cpt_eps_init
@@ -119,9 +133,11 @@ class CPTRouter(nn.Module):
             torch.tensor(CPT_ROUTER_ALGORITHM_VERSION, dtype=torch.int64),
         )
         self.reset_parameters()
+        self._compiled_forward_impl = None
 
     def _apply(self, fn, recurse: bool = True):
         """Move devices normally while retaining the CPT FP32 precision island."""
+        self._compiled_forward_impl = None
         parameter_state = {
             name: (
                 parameter.detach().clone(),
@@ -256,6 +272,147 @@ class CPTRouter(nn.Module):
         norm = torch.linalg.vector_norm(tensor, dim=dim, keepdim=True)
         return tensor / norm.clamp_min(eps)
 
+    def _route_chunk(
+        self,
+        z_chunk: torch.Tensor,
+        valid_chunk: torch.Tensor,
+        state_old: torch.Tensor,
+        nu_old: torch.Tensor,
+        rho: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Route one chunk from the entry state and advance ``(S, nu)``.
+
+        With ``cpt_state_corrector`` enabled, a second pass refines the chunk
+        probabilities using a first-order estimate of the intra-chunk state
+        and responsibility trajectories; the estimate is exact for
+        single-token chunks.
+        """
+        valid_rows = valid_chunk.any(dim=1, keepdim=True)
+
+        beta = self.beta_max * nu_old / (nu_old + self.kappa_beta)
+        mixed = (
+            self.anchors.unsqueeze(0)
+            * (1.0 - beta.detach().unsqueeze(1))
+            + state_old.detach() * beta.detach().unsqueeze(1)
+        )
+        prototypes = self._stable_l2(mixed, dim=1, eps=self.eps_m)
+        prototype_logits = torch.bmm(z_chunk, prototypes) / self.prototype_temperature
+        q_chunk = F.softmax(prototype_logits, dim=-1, dtype=torch.float32)
+        q_chunk = q_chunk * valid_chunk.unsqueeze(-1)
+
+        if self.state_corrector:
+            q_chunk = self._correct_chunk(
+                z_chunk, valid_chunk, state_old, nu_old, rho, q_chunk
+            )
+
+        with torch.no_grad():
+            q_detached = q_chunk.detach()
+            valid_count_int = valid_chunk.sum(dim=1)
+            valid_count = valid_count_int.to(torch.float32)
+            routing_mass = q_detached.sum(dim=1)
+            weighted_projection = torch.bmm(
+                z_chunk.detach().transpose(1, 2),
+                q_detached,
+            )
+            state_gradient = (
+                state_old * routing_mass.unsqueeze(1)
+                - weighted_projection
+                + self.lambda_sa
+                * valid_count.view(-1, 1, 1)
+                * (state_old - self.anchors.detach().unsqueeze(0))
+            )
+            state_candidate = state_old - self.state_step_size * state_gradient
+            state_norm = torch.linalg.vector_norm(
+                state_candidate, dim=1, keepdim=True
+            )
+            state_candidate = state_candidate / torch.clamp_min(
+                state_norm / self.state_radius,
+                1.0,
+            )
+            valid_after = valid_count_int.unsqueeze(-1) - valid_chunk.cumsum(
+                dim=1,
+            )
+            decay_weights = rho.pow(valid_after).unsqueeze(-1)
+            retained_responsibility = rho.pow(valid_count).unsqueeze(-1)
+            nu_candidate = (
+                retained_responsibility * nu_old
+                + (q_detached * decay_weights).sum(dim=1)
+            )
+            next_state = torch.where(
+                valid_rows.unsqueeze(-1), state_candidate, state_old
+            )
+            next_responsibility = torch.where(
+                valid_rows, nu_candidate, nu_old
+            )
+        return q_chunk, next_state, next_responsibility
+
+    def _correct_chunk(
+        self,
+        z_chunk: torch.Tensor,
+        valid_chunk: torch.Tensor,
+        state_old: torch.Tensor,
+        nu_old: torch.Tensor,
+        rho: torch.Tensor,
+        q_chunk: torch.Tensor,
+    ) -> torch.Tensor:
+        """Refine chunk probabilities with first-order state trajectories.
+
+        Pass 1 routed every token from the entry state.  This pass estimates
+        the state ``S_t`` and responsibility ``nu_t`` that the strict
+        sequential update would have held at each position (using pass-1
+        responsibilities, via exclusive prefix sums) and re-routes each token
+        from its own corrected prototype.  Single-token chunks have an empty
+        prefix and therefore reproduce pass 1 exactly.
+        """
+        with torch.no_grad():
+            token_gradients = (
+                (state_old.unsqueeze(1) - z_chunk.unsqueeze(-1))
+                * q_chunk.unsqueeze(2)
+                + self.lambda_sa
+                * (state_old.unsqueeze(1) - self.anchors.detach().unsqueeze(0).unsqueeze(0))
+            ) * valid_chunk.unsqueeze(-1).unsqueeze(-1)
+            exclusive_gradients = token_gradients.cumsum(dim=1) - token_gradients
+            state_trajectory = (
+                state_old.unsqueeze(1) - self.state_step_size * exclusive_gradients
+            )
+            trajectory_norm = torch.linalg.vector_norm(
+                state_trajectory, dim=2, keepdim=True
+            )
+            state_trajectory = state_trajectory / torch.clamp_min(
+                trajectory_norm / self.state_radius,
+                1.0,
+            )
+
+            valid_float = valid_chunk.to(torch.float32)
+            valid_before = valid_float.cumsum(dim=1) - valid_float
+            inverse_decay = rho.pow(-(valid_before + 1.0)).unsqueeze(-1)
+            weighted_probabilities = q_chunk.detach() * inverse_decay
+            exclusive_weighted = (
+                weighted_probabilities.cumsum(dim=1) - weighted_probabilities
+            )
+            responsibility_trajectory = rho.pow(valid_before).unsqueeze(-1) * (
+                nu_old.unsqueeze(1) + exclusive_weighted
+            )
+            beta_trajectory = (
+                self.beta_max
+                * responsibility_trajectory
+                / (responsibility_trajectory + self.kappa_beta)
+            )
+
+        corrected_mixed = (
+            self.anchors.unsqueeze(0).unsqueeze(0)
+            * (1.0 - beta_trajectory.detach().unsqueeze(2))
+            + state_trajectory.detach() * beta_trajectory.detach().unsqueeze(2)
+        )
+        corrected_prototypes = self._stable_l2(
+            corrected_mixed, dim=2, eps=self.eps_m
+        )
+        corrected_logits = torch.einsum(
+            "btd,btdk->btk", z_chunk, corrected_prototypes
+        ) / self.prototype_temperature
+        q_corrected = F.softmax(corrected_logits, dim=-1, dtype=torch.float32)
+        return q_corrected * valid_chunk.unsqueeze(-1)
+
     def expert_kernel(self) -> torch.Tensor:
         """Return B in R^{K x N}, row-normalized over experts."""
         # ``energy`` stores Theta_C. Right-centering implements C = Theta_C H_N.
@@ -275,7 +432,35 @@ class CPTRouter(nn.Module):
 
         ``attention_mask`` is ``[batch, sequence]`` with True marking a valid
         (routable) token and False marking padding.
+
+        On CUDA during training the implementation is compiled on first use so
+        the chunk loop runs as fused kernels.  Compilation unrolls the loop, so
+        it is skipped when the chunk count exceeds ``_MAX_COMPILED_CHUNKS``;
+        raise ``cpt_state_chunk_size`` to keep long sequences on the fast path.
+        CPU and eval paths stay eager for determinism and to avoid recompiling
+        on variable lengths.
         """
+        if (
+            hidden_states.is_cuda
+            and self.training
+            and self._should_compile(hidden_states.shape[1])
+        ):
+            if self._compiled_forward_impl is None:
+                self._compiled_forward_impl = torch.compile(self._forward_impl)
+            return self._compiled_forward_impl(hidden_states, attention_mask)
+        return self._forward_impl(hidden_states, attention_mask)
+
+    def _should_compile(self, sequence_length: int) -> bool:
+        num_chunks = (sequence_length + self.state_chunk_size - 1) // (
+            self.state_chunk_size
+        )
+        return num_chunks <= _MAX_COMPILED_CHUNKS
+
+    def _forward_impl(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+    ) -> CPTRouterOutput:
         if hidden_states.ndim != 3:
             raise ValueError("hidden_states must have shape [batch, sequence, hidden]")
         batch_size, sequence_length, hidden_size = hidden_states.shape
@@ -330,77 +515,18 @@ class CPTRouter(nn.Module):
                 dtype=torch.float32,
             )
             prototype_probability_chunks: list[torch.Tensor] = []
+            rho = responsibility.new_tensor(self.rho_beta)
 
             for chunk_start in range(0, sequence_length, self.state_chunk_size):
                 chunk_end = min(chunk_start + self.state_chunk_size, sequence_length)
-                valid_chunk = valid_mask[:, chunk_start:chunk_end]
-                valid_rows = valid_chunk.any(dim=1, keepdim=True)
-                z_t = projected[:, chunk_start:chunk_end]
-                state_old = short_state
-                nu_old = responsibility
-
-                beta = self.beta_max * nu_old / (nu_old + self.kappa_beta)
-                mixed = (
-                    self.anchors.unsqueeze(0)
-                    * (1.0 - beta.detach().unsqueeze(1))
-                    + state_old.detach() * beta.detach().unsqueeze(1)
+                q_chunk, short_state, responsibility = self._route_chunk(
+                    projected[:, chunk_start:chunk_end],
+                    valid_mask[:, chunk_start:chunk_end],
+                    short_state,
+                    responsibility,
+                    rho,
                 )
-                prototypes = self._stable_l2(mixed, dim=1, eps=self.eps_m)
-                prototype_logits = torch.einsum(
-                    "btd,bdk->btk", z_t, prototypes
-                ) / self.prototype_temperature
-                q_t = F.softmax(prototype_logits, dim=-1, dtype=torch.float32)
-                q_t = torch.where(
-                    valid_chunk.unsqueeze(-1),
-                    q_t,
-                    torch.zeros_like(q_t),
-                )
-                prototype_probability_chunks.append(q_t)
-
-                with torch.no_grad():
-                    q_detached = q_t.detach()
-                    valid_count = valid_chunk.sum(dim=1, dtype=torch.float32)
-                    routing_mass = q_detached.sum(dim=1)
-                    weighted_projection = torch.einsum(
-                        "btd,btk->bdk",
-                        z_t.detach(),
-                        q_detached,
-                    )
-                    state_gradient = (
-                        state_old * routing_mass.unsqueeze(1)
-                        - weighted_projection
-                        + self.lambda_sa
-                        * valid_count.view(batch_size, 1, 1)
-                        * (state_old - self.anchors.detach().unsqueeze(0))
-                    )
-                    state_candidate = state_old - self.state_step_size * state_gradient
-                    state_norm = torch.linalg.vector_norm(
-                        state_candidate, dim=1, keepdim=True
-                    )
-                    state_candidate = state_candidate / torch.maximum(
-                        torch.ones_like(state_norm),
-                        state_norm / self.state_radius,
-                    )
-                    valid_after = (
-                        valid_chunk.to(torch.int64)
-                        .flip(dims=(1,))
-                        .cumsum(dim=1)
-                        .flip(dims=(1,))
-                        - valid_chunk.to(torch.int64)
-                    )
-                    rho = responsibility.new_tensor(self.rho_beta)
-                    decay_weights = rho.pow(valid_after).unsqueeze(-1)
-                    retained_responsibility = rho.pow(valid_count).unsqueeze(-1)
-                    nu_candidate = (
-                        retained_responsibility * nu_old
-                        + (q_detached * decay_weights).sum(dim=1)
-                    )
-                    short_state = torch.where(
-                        valid_rows.unsqueeze(-1), state_candidate, state_old
-                    )
-                    responsibility = torch.where(
-                        valid_rows, nu_candidate, nu_old
-                    )
+                prototype_probability_chunks.append(q_chunk)
 
             nominal_prototype_probabilities = torch.cat(
                 prototype_probability_chunks,

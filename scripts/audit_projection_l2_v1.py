@@ -103,17 +103,19 @@ def run(device):
         if tensor.grad is None or not bool(torch.isfinite(tensor.grad).all()):
             raise AssertionError(f"missing or non-finite {name} gradient")
 
-    router_source = inspect.getsource(CPTRouter.forward)
+    router_source = inspect.getsource(CPTRouter._forward_impl)
+    chunk_source = inspect.getsource(CPTRouter._route_chunk)
     moe_source = inspect.getsource(SparseMoE.forward)
     required_fragments = (
         "projected = F.linear",
         "self._stable_l2(projected",
-        "q_t = F.softmax",
         "valid_probabilities = prototype_probabilities @ kernel",
     )
     for fragment in required_fragments:
         if fragment not in router_source:
             raise AssertionError(f"missing strict-v1 source fragment: {fragment}")
+    if "q_chunk = F.softmax" not in chunk_source:
+        raise AssertionError("missing strict-v1 source fragment: q_chunk = F.softmax")
     if router_source.count("@ kernel") != 1:
         raise AssertionError("final CPT probabilities must use exactly one GEMM")
     projection_block = router_source.split("projected = F.linear", 1)[1].split(

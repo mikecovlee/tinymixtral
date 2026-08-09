@@ -137,6 +137,9 @@ def test_config_derives_k_and_authoritative_defaults():
         ({"cpt_state_chunk_size": 0}, "positive integer"),
         ({"cpt_state_chunk_size": True}, "positive integer"),
         ({"cpt_state_chunk_size": 2.0}, "positive integer"),
+        ({"cpt_state_corrector": 1}, "boolean"),
+        ({"cpt_state_corrector": 0.0}, "boolean"),
+        ({"cpt_state_corrector": "true"}, "boolean"),
     ],
 )
 def test_config_rejects_invalid_cpt_contract(updates, message):
@@ -267,6 +270,88 @@ def test_blockwise_router_preserves_probability_mass_padding_and_gradients():
         assert torch.isfinite(parameter.grad).all()
 
 
+def test_corrector_defaults_to_off():
+    assert tiny_config().cpt_state_corrector is False
+
+
+def test_corrector_is_exact_for_single_token_chunks():
+    torch.manual_seed(41)
+    standard = CPTRouter(tiny_config(cpt_state_chunk_size=1), layer_index=0)
+    corrected = CPTRouter(
+        tiny_config(cpt_state_chunk_size=1, cpt_state_corrector=True),
+        layer_index=0,
+    )
+    hidden = torch.randn(2, 6, standard.hidden_size)
+    mask = torch.tensor([[1, 1, 0, 1, 1, 0], [0, 1, 1, 0, 1, 1]], dtype=torch.bool)
+    torch.testing.assert_close(
+        corrected(hidden, mask).probabilities,
+        standard(hidden, mask).probabilities,
+        atol=0,
+        rtol=0,
+    )
+
+
+def test_corrector_improves_fidelity_to_strict_v1():
+    torch.manual_seed(43)
+    reference = CPTRouter(tiny_config(cpt_state_chunk_size=1), layer_index=0)
+    hidden = torch.randn(2, 32, reference.hidden_size)
+    mask = torch.randint(0, 2, (2, 32), dtype=torch.bool)
+    mask[:, 0] = True
+    reference_probabilities = reference(hidden, mask).probabilities.detach()
+
+    def mean_error(**overrides):
+        router = CPTRouter(
+            tiny_config(cpt_state_chunk_size=8, **overrides),
+            layer_index=0,
+        )
+        probabilities = router(hidden, mask).probabilities.detach()
+        valid = mask.unsqueeze(-1).expand_as(probabilities)
+        return (
+            (probabilities[valid] - reference_probabilities[valid])
+            .abs()
+            .mean()
+            .item()
+        )
+
+    plain_error = mean_error()
+    corrected_error = mean_error(cpt_state_corrector=True)
+    assert plain_error > 0
+    assert corrected_error < 0.5 * plain_error
+
+
+def test_corrector_preserves_probability_mass_padding_and_gradients():
+    torch.manual_seed(47)
+    router = CPTRouter(
+        tiny_config(cpt_state_chunk_size=3, cpt_state_corrector=True),
+        layer_index=0,
+    )
+    hidden = torch.randn(2, 7, router.hidden_size, requires_grad=True)
+    mask = torch.tensor(
+        [[1, 1, 0, 1, 1, 1, 0], [0, 1, 1, 0, 1, 1, 1]],
+        dtype=torch.bool,
+    )
+
+    output = router(hidden, mask)
+    torch.testing.assert_close(
+        output.probabilities[mask].sum(dim=-1),
+        torch.ones(int(mask.sum())),
+        atol=2e-6,
+        rtol=0,
+    )
+    assert torch.equal(
+        output.probabilities[~mask],
+        torch.zeros_like(output.probabilities[~mask]),
+    )
+
+    output.probabilities.square().sum().backward()
+    assert hidden.grad is not None
+    assert torch.isfinite(hidden.grad).all()
+    assert torch.equal(hidden.grad[~mask], torch.zeros_like(hidden.grad[~mask]))
+    for parameter in router.trainable_parameters():
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+
+
 @pytest.mark.parametrize("scale", [0.0, 1e-12, 1.0, 1e6])
 def test_router_is_finite_for_zero_near_zero_and_extreme_inputs(scale):
     torch.manual_seed(9)
@@ -302,7 +387,7 @@ def test_strict_v1_projection_has_no_projection_softmax():
 
 
 def test_router_emits_final_probabilities_with_one_micro_batch_gemm():
-    source = inspect.getsource(CPTRouter.forward)
+    source = inspect.getsource(CPTRouter._forward_impl)
     assert "flat_prototype_probabilities.index_select" in source
     assert "valid_probabilities = prototype_probabilities @ kernel" in source
     assert ".view(batch_size, sequence_length, self.num_experts)" in source
