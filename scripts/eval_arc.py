@@ -22,11 +22,11 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from evals.prompt_scoring import score_answers
-from evals.metrics import accuracy_score
-from datasets import load_dataset
-from transformers import AutoTokenizer
+from datasets import load_dataset  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
 
+from evals.metrics import accuracy_score  # noqa: E402
+from evals.prompt_scoring import score_answers  # noqa: E402
 
 TASKS = {
     "arc_c": {
@@ -75,9 +75,7 @@ def load_model_and_tokenizer(checkpoint, tokenizer_path, precision="bf16", trust
     dtype_map = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp32": torch.float32}
     dtype = dtype_map[precision]
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path or checkpoint, trust_remote_code=trust_remote_code, legacy=False
-    )
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path or checkpoint, trust_remote_code=trust_remote_code, legacy=False)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -94,8 +92,7 @@ def main():
     p.add_argument("--tasks", default="arc_c", help="逗号分隔: arc_c, arc_e")
     p.add_argument("--limit", type=int, default=None, help="最多评测样例数")
     p.add_argument("--shots", type=int, default=0, help="few-shot 示例数（0 = zero-shot）")
-    p.add_argument("--max-length", type=int, default=None,
-                   help="最大序列长度（默认 zero-shot 256, few-shot 512）")
+    p.add_argument("--max-length", type=int, default=None, help="最大序列长度（默认 zero-shot 256, few-shot 512）")
     p.add_argument("--batch-size", type=int, default=8, help="批大小")
     p.add_argument("--precision", default="bf16", choices=["fp16", "bf16", "fp32"])
     p.add_argument("--device", default=None, help="设备 (cuda/cpu)")
@@ -108,15 +105,11 @@ def main():
         args.max_length = 512 if args.shots > 0 else 256
 
     torch.manual_seed(args.seed)
-    device = torch.device(args.device) if args.device else torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
+    device = torch.device(args.device) if args.device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     # 加载模型
-    model, tokenizer = load_model_and_tokenizer(
-        args.checkpoint, args.tokenizer, args.precision
-    )
+    model, tokenizer = load_model_and_tokenizer(args.checkpoint, args.tokenizer, args.precision)
     model = model.to(device)
     nM = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Model: {nM:.0f}M params")
@@ -177,7 +170,8 @@ def main():
         # 评分
         t0 = time.time()
         score_results = score_answers(
-            model, tokenizer,
+            model,
+            tokenizer,
             prompts=prompts,
             answer_choices=answer_choices,
             label_ids=label_id_lists,
@@ -189,7 +183,7 @@ def main():
         y_pred = [r.predicted_label for r in score_results]
         acc = accuracy_score(gold_labels, y_pred)
 
-        print(f"  Accuracy: {acc:.4f} ({elapsed:.0f}s, {elapsed/len(data):.2f}s/example)")
+        print(f"  Accuracy: {acc:.4f} ({elapsed:.0f}s, {elapsed / len(data):.2f}s/example)")
 
         # 调试
         if args.debug_examples > 0:

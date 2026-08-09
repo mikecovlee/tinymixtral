@@ -3,11 +3,9 @@
 
 """评测指标：accuracy, F1, Matthews correlation。"""
 
-from sklearn.metrics import (
-    accuracy_score as sk_accuracy,
-    f1_score as sk_f1,
-    matthews_corrcoef as sk_mcc,
-)
+from sklearn.metrics import accuracy_score as sk_accuracy
+from sklearn.metrics import f1_score as sk_f1
+from sklearn.metrics import matthews_corrcoef as sk_mcc
 
 
 def accuracy_score(y_true, y_pred):

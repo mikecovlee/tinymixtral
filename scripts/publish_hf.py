@@ -20,8 +20,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hf.configuration_tinymixtral import TinyMixtralConfig
-from hf.modeling_tinymixtral import TinyMixtralForCausalLM
+from hf.configuration_tinymixtral import TinyMixtralConfig  # noqa: E402
+from hf.modeling_tinymixtral import TinyMixtralForCausalLM  # noqa: E402
 
 
 def main():
@@ -34,7 +34,8 @@ def main():
     ckpt = Path(args.checkpoint)
     bin_file = ckpt / "pytorch_model.bin"
     if not bin_file.exists():
-        print(f"ERROR: {bin_file} not found"); sys.exit(1)
+        print(f"ERROR: {bin_file} not found")
+        sys.exit(1)
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -86,6 +87,7 @@ def main():
     # 6. 验证
     print("\nVerifying AutoModelForCausalLM.from_pretrained() ...")
     from transformers import AutoModelForCausalLM
+
     m = AutoModelForCausalLM.from_pretrained(str(output), trust_remote_code=True)
     nM2 = sum(p.numel() for p in m.parameters()) / 1e6
     assert abs(nM - nM2) < 1, f"Mismatch: {nM} vs {nM2}"
@@ -95,11 +97,11 @@ def main():
     out = m(x[:, :-1], labels=x[:, 1:])
     print(f"OK: forward loss={out.loss.item():.4f}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Ready: {output}/")
-    print(f"  from transformers import AutoModelForCausalLM")
+    print("  from transformers import AutoModelForCausalLM")
     print(f"  model = AutoModelForCausalLM.from_pretrained('{output}/', trust_remote_code=True)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

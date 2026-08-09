@@ -14,11 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import torch
+import torch  # noqa: E402
 
-from model.config import TinyMixtralConfig
-from model.cpt_router import CPTRouter
-from model.modeling import SparseMoE
+from model.config import TinyMixtralConfig  # noqa: E402
+from model.cpt_router import CPTRouter  # noqa: E402
+from model.modeling import SparseMoE  # noqa: E402
 
 
 def make_config():
@@ -43,12 +43,8 @@ def first_token_column_oracle(router, hidden):
     x = hidden[0, 0].float().unsqueeze(1)
     projected = router.projection @ x
     z = projected / max(float(torch.linalg.vector_norm(projected)), router.eps_z)
-    prototypes = router.anchors / torch.linalg.vector_norm(
-        router.anchors, dim=0, keepdim=True
-    ).clamp_min(router.eps_m)
-    q = torch.softmax(
-        (prototypes.T @ z).squeeze(1) / router.prototype_temperature, dim=0
-    )
+    prototypes = router.anchors / torch.linalg.vector_norm(router.anchors, dim=0, keepdim=True).clamp_min(router.eps_m)
+    q = torch.softmax((prototypes.T @ z).squeeze(1) / router.prototype_temperature, dim=0)
     energy = router.energy - router.energy.mean(dim=-1, keepdim=True)
     kernel = torch.softmax(
         (energy - router.congestion_price.unsqueeze(0)) / router.expert_temperature,
@@ -70,18 +66,14 @@ def run(device):
 
     output = router(hidden, mask)
     expected_first = first_token_column_oracle(router, hidden)
-    torch.testing.assert_close(
-        output.probabilities[0, 0], expected_first, atol=2e-6, rtol=2e-6
-    )
+    torch.testing.assert_close(output.probabilities[0, 0], expected_first, atol=2e-6, rtol=2e-6)
     torch.testing.assert_close(
         output.probabilities[mask].sum(dim=-1),
         torch.ones(int(mask.sum()), device=device),
         atol=2e-6,
         rtol=0,
     )
-    if not torch.equal(
-        output.probabilities[~mask], torch.zeros_like(output.probabilities[~mask])
-    ):
+    if not torch.equal(output.probabilities[~mask], torch.zeros_like(output.probabilities[~mask])):
         raise AssertionError("padding positions must be zero and must not be routed")
     if int(output.proposal.token_count) != int(mask.sum()):
         raise AssertionError("padding was included in CPT token_count")
@@ -118,9 +110,7 @@ def run(device):
         raise AssertionError("missing strict-v1 source fragment: q_chunk = F.softmax")
     if router_source.count("@ kernel") != 1:
         raise AssertionError("final CPT probabilities must use exactly one GEMM")
-    projection_block = router_source.split("projected = F.linear", 1)[1].split(
-        "kernel = self.expert_kernel", 1
-    )[0]
+    projection_block = router_source.split("projected = F.linear", 1)[1].split("kernel = self.expert_kernel", 1)[0]
     if "softmax" in projection_block:
         raise AssertionError("projection-softmax was found in strict CPT v1")
     moe_tree = ast.parse(textwrap.dedent(moe_source))

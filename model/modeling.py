@@ -20,14 +20,14 @@ from .config import CPT_ROUTING_ARCHITECTURE_FIELDS, TinyMixtralConfig
 from .cpt_router import (
     CPT_ROUTER_ALGORITHM_VERSION,
     CPTLayerProposal,
-    CPTTransaction,
     CPTRouter,
+    CPTTransaction,
 )
-
 
 # ============================================================
 # RMSNorm
 # ============================================================
+
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
@@ -48,6 +48,7 @@ class RMSNorm(nn.Module):
 # ============================================================
 # RoPE
 # ============================================================
+
 
 class RotaryEmbedding(nn.Module):
     """RoPE 位置编码，使用复数旋转。"""
@@ -81,6 +82,7 @@ class RotaryEmbedding(nn.Module):
 # GQA Attention
 # ============================================================
 
+
 class GQAAttention(nn.Module):
     """Grouped Query Attention with RoPE and FlashAttention (sdpa)."""
 
@@ -99,9 +101,7 @@ class GQAAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-        self.rotary_emb = RotaryEmbedding(
-            self.head_dim, config.max_position_embeddings, config.rope_theta
-        )
+        self.rotary_emb = RotaryEmbedding(self.head_dim, config.max_position_embeddings, config.rope_theta)
         self.attention_dropout = config.attention_dropout
 
     def forward(
@@ -129,14 +129,18 @@ class GQAAttention(nn.Module):
             pad_4d = attention_mask[:, None, None, :]
             combined = causal[None, None, :, :] & pad_4d
             attn_output = F.scaled_dot_product_attention(
-                q, k_exp, v_exp,
+                q,
+                k_exp,
+                v_exp,
                 attn_mask=combined,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
             )
         else:
             attn_output = F.scaled_dot_product_attention(
-                q, k, v,
+                q,
+                k,
+                v,
                 attn_mask=None,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=True,
@@ -150,6 +154,7 @@ class GQAAttention(nn.Module):
 # ============================================================
 # MoE FFN
 # ============================================================
+
 
 class SparseMoE(nn.Module):
     """Mixtral-style Sparse Mixture of Experts FFN。
@@ -171,15 +176,9 @@ class SparseMoE(nn.Module):
 
         # Expert 参数：每个 expert 有 gate_proj, up_proj, down_proj
         # 使用 3D 权重 [num_experts, intermediate, hidden] 方便实现
-        self.gate_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.expert_intermediate, self.hidden_size)
-        )
-        self.up_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.expert_intermediate, self.hidden_size)
-        )
-        self.down_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.hidden_size, self.expert_intermediate)
-        )
+        self.gate_proj = nn.Parameter(torch.empty(self.num_experts, self.expert_intermediate, self.hidden_size))
+        self.up_proj = nn.Parameter(torch.empty(self.num_experts, self.expert_intermediate, self.hidden_size))
+        self.down_proj = nn.Parameter(torch.empty(self.num_experts, self.hidden_size, self.expert_intermediate))
 
         self._init_weights()
 
@@ -225,9 +224,7 @@ class SparseMoE(nn.Module):
                 attention_mask.to(device=x.device, dtype=torch.bool).reshape(-1),
                 as_tuple=False,
             ).flatten()
-        routing_weights = all_routing_weights.index_select(
-            0, valid_token_idx
-        ).to(x.dtype)
+        routing_weights = all_routing_weights.index_select(0, valid_token_idx).to(x.dtype)
         routing_weights_topk, selected_experts = torch.topk(
             routing_weights,
             self.top_k,
@@ -244,9 +241,7 @@ class SparseMoE(nn.Module):
 
         flat_experts = selected_experts.view(-1)
         flat_weights = routing_weights_topk.view(-1)
-        flat_token_idx = (
-            valid_token_idx.unsqueeze(1).expand(-1, self.top_k).reshape(-1)
-        )
+        flat_token_idx = valid_token_idx.unsqueeze(1).expand(-1, self.top_k).reshape(-1)
 
         sorted_indices = flat_experts.argsort(stable=True)
         sorted_token_idx = flat_token_idx[sorted_indices]
@@ -287,6 +282,7 @@ class SparseMoE(nn.Module):
 # Transformer Block
 # ============================================================
 
+
 class MoETransformerBlock(nn.Module):
     """一个 Transformer 层：GQA Attention + MoE FFN。"""
 
@@ -318,9 +314,7 @@ class MoETransformerBlock(nn.Module):
         # MoE FFN
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, aux_loss, load_sum, token_count, state_version = self.moe(
-            hidden_states, attention_mask=attention_mask
-        )
+        hidden_states, aux_loss, load_sum, token_count, state_version = self.moe(hidden_states, attention_mask=attention_mask)
         hidden_states = residual + hidden_states
 
         return hidden_states, aux_loss, load_sum, token_count, state_version
@@ -329,6 +323,7 @@ class MoETransformerBlock(nn.Module):
 # ============================================================
 # TinyMixtralForCausalLM
 # ============================================================
+
 
 class TinyMixtralForCausalLM(nn.Module):
     """TinyMixtral 因果语言模型。
@@ -344,10 +339,9 @@ class TinyMixtralForCausalLM(nn.Module):
         self.config = config
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([
-            MoETransformerBlock(config, layer_index=layer_index)
-            for layer_index in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [MoETransformerBlock(config, layer_index=layer_index) for layer_index in range(config.num_hidden_layers)]
+        )
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -461,24 +455,16 @@ class TinyMixtralForCausalLM(nn.Module):
         return tuple(layer.moe.cpt_router for layer in self.layers)
 
     def cpt_trainable_parameters(self) -> Tuple[nn.Parameter, ...]:
-        return tuple(
-            parameter
-            for router in self._cpt_routers()
-            for parameter in router.trainable_parameters()
-        )
+        return tuple(parameter for router in self._cpt_routers() for parameter in router.trainable_parameters())
 
     def _validate_cpt_config_binding(self) -> None:
-        for layer_index, (layer, router) in enumerate(
-            zip(self.layers, self._cpt_routers())
-        ):
+        for layer_index, (layer, router) in enumerate(zip(self.layers, self._cpt_routers())):
             router.validate_config_binding(self.config)
             if (
                 type(layer.moe.top_k) is not type(self.config.num_experts_per_tok)
                 or layer.moe.top_k != self.config.num_experts_per_tok
             ):
-                raise RuntimeError(
-                    f"MoE layer {layer_index} Top-k no longer matches model config"
-                )
+                raise RuntimeError(f"MoE layer {layer_index} Top-k no longer matches model config")
 
     @torch.no_grad()
     def validate_persistent_cpt_state(
@@ -498,16 +484,10 @@ class TinyMixtralForCausalLM(nn.Module):
         if versions and len(set(versions)) != 1:
             raise RuntimeError(f"CPT layer state versions disagree: {versions}")
         if optimizer_steps and len(set(optimizer_steps)) != 1:
-            raise RuntimeError(
-                "CPT layer optimizer steps disagree: "
-                f"{optimizer_steps}"
-            )
+            raise RuntimeError("CPT layer optimizer steps disagree: " f"{optimizer_steps}")
 
     def get_cpt_state_version(self) -> int:
-        versions = [
-            int(router.state_version.item())
-            for router in self._cpt_routers()
-        ]
+        versions = [int(router.state_version.item()) for router in self._cpt_routers()]
         if not versions:
             raise RuntimeError("model has no CPT Routers")
         if len(set(versions)) != 1:
@@ -515,17 +495,11 @@ class TinyMixtralForCausalLM(nn.Module):
         return versions[0]
 
     def get_cpt_optimizer_step(self) -> int:
-        optimizer_steps = [
-            int(router.optimizer_step.item())
-            for router in self._cpt_routers()
-        ]
+        optimizer_steps = [int(router.optimizer_step.item()) for router in self._cpt_routers()]
         if not optimizer_steps:
             raise RuntimeError("model has no CPT Routers")
         if len(set(optimizer_steps)) != 1:
-            raise RuntimeError(
-                "CPT layer optimizer steps disagree: "
-                f"{optimizer_steps}"
-            )
+            raise RuntimeError("CPT layer optimizer steps disagree: " f"{optimizer_steps}")
         return optimizer_steps[0]
 
     def validate_cpt_transaction(self, transaction: CPTTransaction) -> None:
@@ -556,26 +530,19 @@ class TinyMixtralForCausalLM(nn.Module):
     ) -> int:
         """Commit all Router prices/anchors/versions, or none of them."""
         if bool(getattr(self, "_tinymixtral_fail_stop", False)):
-            raise RuntimeError(
-                "training state is fail-stop poisoned; restore the last "
-                "successful checkpoint"
-            )
+            raise RuntimeError("training state is fail-stop poisoned; restore the last " "successful checkpoint")
         try:
             self.validate_cpt_transaction(transaction)
             current_optimizer_step = self.get_cpt_optimizer_step()
             if optimizer_step is None:
                 optimizer_step = current_optimizer_step
             elif type(optimizer_step) is not int or optimizer_step < 0:
-                raise TypeError(
-                    "CPT optimizer_step must be a non-negative integer"
-                )
+                raise TypeError("CPT optimizer_step must be a non-negative integer")
             if optimizer_step not in (
                 current_optimizer_step,
                 current_optimizer_step + 1,
             ):
-                raise RuntimeError(
-                    "CPT optimizer_step must stay unchanged or advance by one"
-                )
+                raise RuntimeError("CPT optimizer_step must stay unchanged or advance by one")
         except BaseException:
             if isinstance(transaction, CPTTransaction):
                 transaction.consumed = True
@@ -605,13 +572,8 @@ class TinyMixtralForCausalLM(nn.Module):
                     recovery_errors.append(error)
             if recovery_errors:
                 self._tinymixtral_fail_stop = True
-                failure_types = ", ".join(
-                    type(error).__name__ for error in recovery_errors
-                )
-                raise RuntimeError(
-                    "CPT commit failed and recovery was incomplete: "
-                    + failure_types
-                ) from recovery_errors[0]
+                failure_types = ", ".join(type(error).__name__ for error in recovery_errors)
+                raise RuntimeError("CPT commit failed and recovery was incomplete: " + failure_types) from recovery_errors[0]
             raise
         return self.get_cpt_state_version()
 
@@ -629,10 +591,7 @@ class TinyMixtralForCausalLM(nn.Module):
         keys = tuple(state_dict.keys())
         legacy = [key for key in keys if key.endswith(".moe.router.weight")]
         if legacy:
-            raise RuntimeError(
-                "legacy Linear Router checkpoints are incompatible with CPT v1: "
-                + ", ".join(legacy)
-            )
+            raise RuntimeError("legacy Linear Router checkpoints are incompatible with CPT v1: " + ", ".join(legacy))
 
         marker = ".moe.cpt_router."
         expected_state = super().state_dict()
@@ -643,9 +602,7 @@ class TinyMixtralForCausalLM(nn.Module):
         if missing:
             raise RuntimeError("checkpoint is missing CPT keys: " + ", ".join(missing))
         if unexpected:
-            raise RuntimeError(
-                "checkpoint contains unknown CPT keys: " + ", ".join(unexpected)
-            )
+            raise RuntimeError("checkpoint contains unknown CPT keys: " + ", ".join(unexpected))
 
         serialized_versions: list[int] = []
         serialized_optimizer_steps: list[int] = []
@@ -656,14 +613,10 @@ class TinyMixtralForCausalLM(nn.Module):
                 raise RuntimeError(f"checkpoint CPT value is not a tensor: {key}")
             if value.shape != expected.shape:
                 raise RuntimeError(
-                    f"checkpoint CPT shape mismatch for {key}: "
-                    f"expected {tuple(expected.shape)}, got {tuple(value.shape)}"
+                    f"checkpoint CPT shape mismatch for {key}: " f"expected {tuple(expected.shape)}, got {tuple(value.shape)}"
                 )
             if value.dtype != expected.dtype:
-                raise RuntimeError(
-                    f"checkpoint CPT dtype mismatch for {key}: "
-                    f"expected {expected.dtype}, got {value.dtype}"
-                )
+                raise RuntimeError(f"checkpoint CPT dtype mismatch for {key}: " f"expected {expected.dtype}, got {value.dtype}")
             if value.is_floating_point() and not bool(torch.isfinite(value).all()):
                 raise RuntimeError(f"checkpoint CPT value is non-finite: {key}")
             if key.endswith(".anchors"):
@@ -680,9 +633,7 @@ class TinyMixtralForCausalLM(nn.Module):
                     raise RuntimeError("checkpoint CPT congestion price is negative")
             elif key.endswith(".router_algorithm_version"):
                 if int(value.item()) != CPT_ROUTER_ALGORITHM_VERSION:
-                    raise RuntimeError(
-                        "checkpoint uses an unsupported CPT algorithm version"
-                    )
+                    raise RuntimeError("checkpoint uses an unsupported CPT algorithm version")
             elif key.endswith(".optimizer_step"):
                 optimizer_step = int(value.item())
                 if optimizer_step < 0:
@@ -694,22 +645,11 @@ class TinyMixtralForCausalLM(nn.Module):
                     raise RuntimeError("checkpoint CPT state_version is negative")
                 serialized_versions.append(version)
         if serialized_versions and len(set(serialized_versions)) != 1:
-            raise RuntimeError(
-                f"checkpoint CPT layer state versions disagree: {serialized_versions}"
-            )
+            raise RuntimeError(f"checkpoint CPT layer state versions disagree: {serialized_versions}")
         if serialized_optimizer_steps and len(set(serialized_optimizer_steps)) != 1:
-            raise RuntimeError(
-                "checkpoint CPT layer optimizer steps disagree: "
-                f"{serialized_optimizer_steps}"
-            )
-        if (
-            serialized_versions
-            and serialized_optimizer_steps
-            and serialized_optimizer_steps[0] > serialized_versions[0]
-        ):
-            raise RuntimeError(
-                "checkpoint CPT optimizer_step exceeds state_version"
-            )
+            raise RuntimeError("checkpoint CPT layer optimizer steps disagree: " f"{serialized_optimizer_steps}")
+        if serialized_versions and serialized_optimizer_steps and serialized_optimizer_steps[0] > serialized_versions[0]:
+            raise RuntimeError("checkpoint CPT optimizer_step exceeds state_version")
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         self._validate_cpt_config_binding()
@@ -725,11 +665,9 @@ class TinyMixtralForCausalLM(nn.Module):
     def save_pretrained(self, path: str):
         """保存为 HuggingFace 兼容格式。"""
         import os
+
         if bool(getattr(self, "_tinymixtral_fail_stop", False)):
-            raise RuntimeError(
-                "training state is fail-stop poisoned; restore the last "
-                "successful checkpoint"
-            )
+            raise RuntimeError("training state is fail-stop poisoned; restore the last " "successful checkpoint")
         self.validate_persistent_cpt_state()
         os.makedirs(path, exist_ok=True)
         self.config.save_pretrained(path)
@@ -745,45 +683,22 @@ class TinyMixtralForCausalLM(nn.Module):
             raw_config = json.load(config_file)
         if not isinstance(raw_config, dict):
             raise RuntimeError("checkpoint config.json must contain an object")
-        missing_routing_architecture = sorted(
-            field
-            for field in CPT_ROUTING_ARCHITECTURE_FIELDS
-            if field not in raw_config
-        )
+        missing_routing_architecture = sorted(field for field in CPT_ROUTING_ARCHITECTURE_FIELDS if field not in raw_config)
         if missing_routing_architecture:
             raise RuntimeError(
-                "checkpoint config is missing CPT routing architecture fields: "
-                + ", ".join(missing_routing_architecture)
+                "checkpoint config is missing CPT routing architecture fields: " + ", ".join(missing_routing_architecture)
             )
-        expected_cpt_keys = {
-            key
-            for key in TinyMixtralConfig.__dataclass_fields__
-            if key.startswith("cpt_")
-        }
-        supplied_cpt_keys = {
-            key
-            for key in raw_config
-            if key.startswith("cpt_")
-        }
+        expected_cpt_keys = {key for key in TinyMixtralConfig.__dataclass_fields__ if key.startswith("cpt_")}
+        supplied_cpt_keys = {key for key in raw_config if key.startswith("cpt_")}
         missing_cpt = sorted(expected_cpt_keys - supplied_cpt_keys)
         unknown_cpt = sorted(supplied_cpt_keys - expected_cpt_keys)
         if missing_cpt:
-            raise RuntimeError(
-                "checkpoint config is missing CPT fields: " + ", ".join(missing_cpt)
-            )
+            raise RuntimeError("checkpoint config is missing CPT fields: " + ", ".join(missing_cpt))
         if unknown_cpt:
-            raise RuntimeError(
-                "checkpoint config contains unknown CPT fields: "
-                + ", ".join(unknown_cpt)
-            )
-        unresolved_cpt = sorted(
-            key for key in expected_cpt_keys if raw_config[key] is None
-        )
+            raise RuntimeError("checkpoint config contains unknown CPT fields: " + ", ".join(unknown_cpt))
+        unresolved_cpt = sorted(key for key in expected_cpt_keys if raw_config[key] is None)
         if unresolved_cpt:
-            raise RuntimeError(
-                "checkpoint config contains unresolved CPT fields: "
-                + ", ".join(unresolved_cpt)
-            )
+            raise RuntimeError("checkpoint config contains unresolved CPT fields: " + ", ".join(unresolved_cpt))
         saved_config = TinyMixtralConfig.from_dict(raw_config)
         if config is None:
             config = saved_config
@@ -793,24 +708,13 @@ class TinyMixtralForCausalLM(nn.Module):
             for field in CPT_ROUTING_ARCHITECTURE_FIELDS:
                 explicit_router_config[field] = getattr(config, field)
                 saved_router_config[field] = getattr(saved_config, field)
-            router_config_disagrees = (
-                explicit_router_config.keys() != saved_router_config.keys()
-                or any(
-                    type(explicit_router_config[key]) is not type(
-                        saved_router_config[key]
-                    )
-                    or explicit_router_config[key] != saved_router_config[key]
-                    for key in (
-                        explicit_router_config.keys()
-                        & saved_router_config.keys()
-                    )
-                )
+            router_config_disagrees = explicit_router_config.keys() != saved_router_config.keys() or any(
+                type(explicit_router_config[key]) is not type(saved_router_config[key])
+                or explicit_router_config[key] != saved_router_config[key]
+                for key in (explicit_router_config.keys() & saved_router_config.keys())
             )
             if router_config_disagrees:
-                raise RuntimeError(
-                    "explicit CPT routing config disagrees with checkpoint "
-                    "config.json"
-                )
+                raise RuntimeError("explicit CPT routing config disagrees with checkpoint " "config.json")
         model = cls(config)
         state_dict = torch.load(f"{path}/pytorch_model.bin", map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict, strict=True)

@@ -127,10 +127,7 @@ def test_config_drift_is_rejected_before_optimizer_step():
 def test_successful_step_commits_all_layers_retracts_anchors_and_lags_price():
     model = tiny_model()
     transaction = skewed_transaction(model, token_count=12)
-    kernels_before = [
-        router.expert_kernel().detach().clone()
-        for router in model._cpt_routers()
-    ]
+    kernels_before = [router.expert_kernel().detach().clone() for router in model._cpt_routers()]
     optimizer = make_adamw(model, lr=0.0, weight_decay=0.0)
     scheduler = make_cosine_schedule(optimizer, warmup_steps=0, total_steps=2)
     set_zero_cpt_gradients(model)
@@ -140,9 +137,7 @@ def test_successful_step_commits_all_layers_retracts_anchors_and_lags_price():
     assert model.get_cpt_optimizer_step() == 1
     for router, kernel_before in zip(model._cpt_routers(), kernels_before):
         expected = torch.zeros(router.num_experts)
-        expected[0] = router.price_learning_rate * (
-            1.0 - router.capacity_factor / router.num_experts
-        )
+        expected[0] = router.price_learning_rate * (1.0 - router.capacity_factor / router.num_experts)
         torch.testing.assert_close(router.congestion_price, expected, atol=1e-7, rtol=0)
         torch.testing.assert_close(
             torch.linalg.vector_norm(router.anchors, dim=0),
@@ -301,9 +296,7 @@ def test_nonunit_anchor_tampering_is_rejected_before_optimizer_step(monkeypatch)
     monkeypatch.setattr(optimizer, "step", tracked_optimizer_step)
     monkeypatch.setattr(scheduler, "step", tracked_scheduler_step)
     monkeypatch.setattr(model, "commit_cpt_transaction", tracked_commit)
-    parameter_snapshot = tuple(
-        parameter.detach().clone() for parameter in model.parameters()
-    )
+    parameter_snapshot = tuple(parameter.detach().clone() for parameter in model.parameters())
     persistent_state = persistent_snapshot(model)
     optimizer_state = copy.deepcopy(optimizer.state_dict())
     scheduler_state = copy.deepcopy(scheduler.state_dict())
@@ -335,9 +328,7 @@ def test_invalid_single_layer_proposal_causes_zero_layer_commits(failure):
     if failure == "nan":
         bad_load = original.load_sum.clone()
         bad_load[0] = float("nan")
-        proposals[1] = CPTLayerProposal(
-            original.layer_index, bad_load, original.token_count, original.state_version
-        )
+        proposals[1] = CPTLayerProposal(original.layer_index, bad_load, original.token_count, original.state_version)
     elif failure == "version":
         proposals[1] = CPTLayerProposal(
             original.layer_index,
@@ -349,9 +340,7 @@ def test_invalid_single_layer_proposal_causes_zero_layer_commits(failure):
         bad_count = original.token_count + 1
         bad_load = original.load_sum.clone()
         bad_load[0] += 1
-        proposals[1] = CPTLayerProposal(
-            original.layer_index, bad_load, bad_count, original.state_version
-        )
+        proposals[1] = CPTLayerProposal(original.layer_index, bad_load, bad_count, original.state_version)
     transaction = CPTTransaction(tuple(proposals))
     before = persistent_snapshot(model)
     with pytest.raises(RuntimeError):
@@ -513,9 +502,7 @@ def test_partial_optimizer_exception_restores_cpt_parameters_and_moments():
     assert transaction.consumed
 
 
-def test_optimizer_failure_with_failed_rollback_poison_blocks_all_reuse(
-    monkeypatch, tmp_path
-):
+def test_optimizer_failure_with_failed_rollback_poison_blocks_all_reuse(monkeypatch, tmp_path):
     model = tiny_model()
     transaction = skewed_transaction(model)
     target = model.cpt_trainable_parameters()[0]
@@ -526,9 +513,7 @@ def test_optimizer_failure_with_failed_rollback_poison_blocks_all_reuse(
     def fail_restore(*_args, **_kwargs):
         raise RuntimeError("injected rollback failure")
 
-    monkeypatch.setattr(
-        train_utils, "_restore_cpt_optimizer_state", fail_restore
-    )
+    monkeypatch.setattr(train_utils, "_restore_cpt_optimizer_state", fail_restore)
     with pytest.raises(RuntimeError, match="recovery was incomplete") as caught:
         _execute_cpt_optimizer_step(model, optimizer, scheduler, transaction)
     assert "injected rollback failure" in str(caught.value.__cause__)
@@ -537,14 +522,21 @@ def test_optimizer_failure_with_failed_rollback_poison_blocks_all_reuse(
         assert training_object._tinymixtral_fail_stop is True
 
     with pytest.raises(RuntimeError, match="fail-stop poisoned"):
-        _execute_cpt_optimizer_step(
-            model, optimizer, scheduler, skewed_transaction(model)
-        )
+        _execute_cpt_optimizer_step(model, optimizer, scheduler, skewed_transaction(model))
     with pytest.raises(RuntimeError, match="fail-stop poisoned"):
         save_checkpoint(
-            model, optimizer, scheduler, tmp_path / "checkpoint",
-            step=0, total_tok=0, warmup_steps=0, total_steps=2,
-            fi=0, ptr=0, batch_size=2, seq_len=5,
+            model,
+            optimizer,
+            scheduler,
+            tmp_path / "checkpoint",
+            step=0,
+            total_tok=0,
+            warmup_steps=0,
+            total_steps=2,
+            fi=0,
+            ptr=0,
+            batch_size=2,
+            seq_len=5,
         )
     with pytest.raises(RuntimeError, match="fail-stop poisoned"):
         model.save_pretrained(tmp_path / "direct_model")
@@ -650,9 +642,7 @@ def test_scheduler_failure_rolls_back_cpt_and_poison_blocks_step_and_save(tmp_pa
     optimizer = make_adamw(model, lr=0.0, weight_decay=0.0)
     scheduler = FailingScheduler(model, optimizer)
     set_zero_cpt_gradients(model)
-    before_parameters = [
-        parameter.detach().clone() for parameter in model.cpt_trainable_parameters()
-    ]
+    before_parameters = [parameter.detach().clone() for parameter in model.cpt_trainable_parameters()]
     before_persistent = persistent_snapshot(model)
 
     with pytest.raises(RuntimeError, match="scheduler failure"):
@@ -662,14 +652,21 @@ def test_scheduler_failure_rolls_back_cpt_and_poison_blocks_step_and_save(tmp_pa
     assert_persistent_equal(model, before_persistent)
     assert transaction.consumed
     with pytest.raises(RuntimeError, match="fail-stop poisoned"):
-        _execute_cpt_optimizer_step(
-            model, optimizer, scheduler, skewed_transaction(model)
-        )
+        _execute_cpt_optimizer_step(model, optimizer, scheduler, skewed_transaction(model))
     with pytest.raises(RuntimeError, match="fail-stop poisoned"):
         save_checkpoint(
-            model, optimizer, scheduler, tmp_path,
-            step=0, total_tok=0, warmup_steps=0, total_steps=2,
-            fi=0, ptr=0, batch_size=2, seq_len=5,
+            model,
+            optimizer,
+            scheduler,
+            tmp_path,
+            step=0,
+            total_tok=0,
+            warmup_steps=0,
+            total_steps=2,
+            fi=0,
+            ptr=0,
+            batch_size=2,
+            seq_len=5,
         )
     with pytest.raises(RuntimeError, match="fail-stop poisoned"):
         model.save_pretrained(tmp_path / "direct_model")
@@ -753,9 +750,7 @@ def test_training_loop_pre_step_failure_is_transactional(
     )
     optimizer.zero_grad(set_to_none=True)
 
-    parameter_snapshot = tuple(
-        parameter.detach().clone() for parameter in model.parameters()
-    )
+    parameter_snapshot = tuple(parameter.detach().clone() for parameter in model.parameters())
     persistent_state = persistent_snapshot(model)
     optimizer_state = copy.deepcopy(optimizer.state_dict())
     scheduler_state = copy.deepcopy(scheduler.state_dict())

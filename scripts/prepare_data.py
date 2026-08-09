@@ -16,11 +16,11 @@ import time
 from pathlib import Path
 
 import torch
-from transformers import AutoTokenizer
 from datasets import load_dataset
+from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
+from model.config import TinyMixtralConfig  # noqa: E402
 
 
 def main():
@@ -30,14 +30,10 @@ def main():
     p.add_argument("--tokenizer", default="tokenizer/")
     p.add_argument("--output", default="data/c4/tokenized")
     target = p.add_mutually_exclusive_group(required=True)
-    target.add_argument("--max-samples", type=int, default=None,
-                        help="最大处理样本数")
-    target.add_argument("--max-tokens", type=int, default=None,
-                        help="最大写入 token 数")
-    p.add_argument("--shard-size", type=int, default=100_000_000,
-                   help="每个 shard 的 token 数（int64 默认约 800MB）")
-    p.add_argument("--force", action="store_true",
-                   help="完整替换已有输出目录")
+    target.add_argument("--max-samples", type=int, default=None, help="最大处理样本数")
+    target.add_argument("--max-tokens", type=int, default=None, help="最大写入 token 数")
+    p.add_argument("--shard-size", type=int, default=100_000_000, help="每个 shard 的 token 数（int64 默认约 800MB）")
+    p.add_argument("--force", action="store_true", help="完整替换已有输出目录")
     args = p.parse_args()
     if args.max_samples is not None and args.max_samples <= 0:
         p.error("max-samples must be positive")
@@ -79,9 +75,7 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, legacy=False)
         expected_vocab_size = TinyMixtralConfig().vocab_size
         if len(tokenizer) != expected_vocab_size:
-            raise ValueError(
-                f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}"
-            )
+            raise ValueError(f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}")
         if tokenizer.eos_token_id is None:
             raise ValueError("Tokenizer must define eos_token_id for document boundaries")
         if tokenizer.pad_token is None:
@@ -123,27 +117,25 @@ def main():
                 tokens = torch.tensor(buf, dtype=torch.long)
                 path = staging / f"train_{shard_idx:04d}.pt"
                 torch.save(tokens, path)
-                print(f"  Saved {path}: {buf_tokens/1e6:.1f}M tokens (sample {count})")
+                print(f"  Saved {path}: {buf_tokens / 1e6:.1f}M tokens (sample {count})")
                 buf = []
                 buf_tokens = 0
                 shard_idx += 1
             if count % 200000 == 0:
-                print(f"  {count} samples, {total_tokens/1e6:.1f}M tokens, {time.time()-t0:.0f}s")
+                print(f"  {count} samples, {total_tokens / 1e6:.1f}M tokens, {time.time() - t0:.0f}s")
             if args.max_samples is not None and count >= args.max_samples:
                 break
             if args.max_tokens is not None and total_tokens >= args.max_tokens:
                 break
 
         if args.max_tokens is not None and total_tokens != args.max_tokens:
-            raise RuntimeError(
-                f"Dataset ended after {total_tokens} tokens, before target {args.max_tokens}"
-            )
+            raise RuntimeError(f"Dataset ended after {total_tokens} tokens, before target {args.max_tokens}")
 
         if buf:
             tokens = torch.tensor(buf, dtype=torch.long)
             path = staging / f"train_{shard_idx:04d}.pt"
             torch.save(tokens, path)
-            print(f"  Saved {path}: {buf_tokens/1e6:.1f}M tokens (final)")
+            print(f"  Saved {path}: {buf_tokens / 1e6:.1f}M tokens (final)")
             shard_idx += 1
 
         if shard_idx == 0:
@@ -160,7 +152,7 @@ def main():
         if backup.exists():
             shutil.rmtree(backup)
 
-        print(f"Done: {count} samples → {total_tokens/1e6:.1f}M tokens → {shard_idx} shards")
+        print(f"Done: {count} samples → {total_tokens / 1e6:.1f}M tokens → {shard_idx} shards")
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise

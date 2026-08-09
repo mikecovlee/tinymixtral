@@ -18,10 +18,10 @@ from torch.utils.checkpoint import checkpoint
 
 from .config import TinyMixtralConfig
 
-
 # ============================================================
 # RMSNorm
 # ============================================================
+
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
@@ -42,6 +42,7 @@ class RMSNorm(nn.Module):
 # ============================================================
 # RoPE
 # ============================================================
+
 
 class RotaryEmbedding(nn.Module):
     """RoPE 位置编码，使用复数旋转。"""
@@ -75,6 +76,7 @@ class RotaryEmbedding(nn.Module):
 # GQA Attention
 # ============================================================
 
+
 class GQAAttention(nn.Module):
     """Grouped Query Attention with RoPE and FlashAttention (sdpa)."""
 
@@ -93,9 +95,7 @@ class GQAAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-        self.rotary_emb = RotaryEmbedding(
-            self.head_dim, config.max_position_embeddings, config.rope_theta
-        )
+        self.rotary_emb = RotaryEmbedding(self.head_dim, config.max_position_embeddings, config.rope_theta)
         self.attention_dropout = config.attention_dropout
 
     def forward(
@@ -123,14 +123,18 @@ class GQAAttention(nn.Module):
             pad_4d = attention_mask[:, None, None, :]
             combined = causal[None, None, :, :] & pad_4d
             attn_output = F.scaled_dot_product_attention(
-                q, k_exp, v_exp,
+                q,
+                k_exp,
+                v_exp,
                 attn_mask=combined,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
             )
         else:
             attn_output = F.scaled_dot_product_attention(
-                q, k, v,
+                q,
+                k,
+                v,
                 attn_mask=None,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=True,
@@ -145,6 +149,7 @@ class GQAAttention(nn.Module):
 # MoE FFN
 # ============================================================
 
+
 class SparseMoE(nn.Module):
     """DeepSeek-style Sparse MoE: shared experts (always active) + routed experts (top-k).
 
@@ -155,8 +160,8 @@ class SparseMoE(nn.Module):
     def __init__(self, config: TinyMixtralConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.num_shared = config.num_shared_experts     # always-on
-        self.num_routed = config.num_routed_experts      # top-k selected
+        self.num_shared = config.num_shared_experts  # always-on
+        self.num_routed = config.num_routed_experts  # top-k selected
         self.top_k = config.num_experts_per_tok
         self.expert_intermediate = config.expert_intermediate_size
         self.jitter_noise = config.router_jitter_noise
@@ -168,33 +173,20 @@ class SparseMoE(nn.Module):
 
         # Shared expert parameters: [num_shared, intermediate, hidden] × 3
         if self.num_shared > 0:
-            self.shared_gate_proj = nn.Parameter(
-                torch.empty(self.num_shared, self.expert_intermediate, self.hidden_size)
-            )
-            self.shared_up_proj = nn.Parameter(
-                torch.empty(self.num_shared, self.expert_intermediate, self.hidden_size)
-            )
-            self.shared_down_proj = nn.Parameter(
-                torch.empty(self.num_shared, self.hidden_size, self.expert_intermediate)
-            )
+            self.shared_gate_proj = nn.Parameter(torch.empty(self.num_shared, self.expert_intermediate, self.hidden_size))
+            self.shared_up_proj = nn.Parameter(torch.empty(self.num_shared, self.expert_intermediate, self.hidden_size))
+            self.shared_down_proj = nn.Parameter(torch.empty(self.num_shared, self.hidden_size, self.expert_intermediate))
 
         # Routed expert parameters: [num_routed, intermediate, hidden] × 3
         if self.num_routed > 0:
-            self.gate_proj = nn.Parameter(
-                torch.empty(self.num_routed, self.expert_intermediate, self.hidden_size)
-            )
-            self.up_proj = nn.Parameter(
-                torch.empty(self.num_routed, self.expert_intermediate, self.hidden_size)
-            )
-            self.down_proj = nn.Parameter(
-                torch.empty(self.num_routed, self.hidden_size, self.expert_intermediate)
-            )
+            self.gate_proj = nn.Parameter(torch.empty(self.num_routed, self.expert_intermediate, self.hidden_size))
+            self.up_proj = nn.Parameter(torch.empty(self.num_routed, self.expert_intermediate, self.hidden_size))
+            self.down_proj = nn.Parameter(torch.empty(self.num_routed, self.hidden_size, self.expert_intermediate))
 
         self._init_weights()
 
     def _init_weights(self, std=0.02):
-        for name in ("shared_gate_proj", "shared_up_proj", "shared_down_proj",
-                     "gate_proj", "up_proj", "down_proj"):
+        for name in ("shared_gate_proj", "shared_up_proj", "shared_down_proj", "gate_proj", "up_proj", "down_proj"):
             param = getattr(self, name, None)
             if param is not None:
                 nn.init.normal_(param, std=std)
@@ -213,9 +205,7 @@ class SparseMoE(nn.Module):
 
         # 1. Shared experts — always active, equal weight
         for e in range(self.num_shared):
-            out += self._forward_expert(
-                x_flat, self.shared_gate_proj[e], self.shared_up_proj[e], self.shared_down_proj[e]
-            )
+            out += self._forward_expert(x_flat, self.shared_gate_proj[e], self.shared_up_proj[e], self.shared_down_proj[e])
 
         # 2. Routed experts — top-k gating
         aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
@@ -258,9 +248,7 @@ class SparseMoE(nn.Module):
             end = start + count
             idx = sorted_token_idx[start:end]
             w = sorted_weights[start:end]
-            expert_out = self._forward_expert(
-                x_flat[idx], self.gate_proj[e], self.up_proj[e], self.down_proj[e]
-            )
+            expert_out = self._forward_expert(x_flat[idx], self.gate_proj[e], self.up_proj[e], self.down_proj[e])
             out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
             start = end
 
@@ -270,6 +258,7 @@ class SparseMoE(nn.Module):
 # ============================================================
 # Transformer Block
 # ============================================================
+
 
 class MoETransformerBlock(nn.Module):
     """一个 Transformer 层：GQA Attention + MoE FFN。"""
@@ -306,6 +295,7 @@ class MoETransformerBlock(nn.Module):
 # TinyMixtralForCausalLM
 # ============================================================
 
+
 class TinyMixtralForCausalLM(nn.Module):
     """TinyMixtral 因果语言模型。
 
@@ -320,9 +310,7 @@ class TinyMixtralForCausalLM(nn.Module):
         self.config = config
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([
-            MoETransformerBlock(config) for _ in range(config.num_hidden_layers)
-        ])
+        self.layers = nn.ModuleList([MoETransformerBlock(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -383,7 +371,10 @@ class TinyMixtralForCausalLM(nn.Module):
         for layer in self.layers:
             if self._use_activation_checkpointing and self.training:
                 hidden_states, aux_loss = checkpoint(
-                    layer, hidden_states, causal_mask, position_ids,
+                    layer,
+                    hidden_states,
+                    causal_mask,
+                    position_ids,
                     use_reentrant=False,
                 )
             else:
@@ -415,6 +406,7 @@ class TinyMixtralForCausalLM(nn.Module):
     def save_pretrained(self, path: str):
         """保存为 HuggingFace 兼容格式。"""
         import os
+
         os.makedirs(path, exist_ok=True)
         self.config.save_pretrained(path)
         state_dict = self.state_dict()

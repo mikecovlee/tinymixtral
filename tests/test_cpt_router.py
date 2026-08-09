@@ -65,15 +65,8 @@ def column_vector_oracle(router, hidden_states, valid_mask=None):
             projected = router.projection @ x_column
             projected_norm = float(torch.linalg.vector_norm(projected))
             z = projected / max(projected_norm, router.eps_z)
-            beta = (
-                router.beta_max
-                * responsibility
-                / (responsibility + router.kappa_beta)
-            )
-            mixed = (
-                router.anchors * (1.0 - beta.unsqueeze(0))
-                + short_state * beta.unsqueeze(0)
-            )
+            beta = router.beta_max * responsibility / (responsibility + router.kappa_beta)
+            mixed = router.anchors * (1.0 - beta.unsqueeze(0)) + short_state * beta.unsqueeze(0)
             prototype_norms = torch.linalg.vector_norm(mixed, dim=0, keepdim=True)
             prototypes = mixed / prototype_norms.clamp_min(router.eps_m)
             q = torch.softmax(
@@ -82,16 +75,12 @@ def column_vector_oracle(router, hidden_states, valid_mask=None):
             )
             result[batch_index, position] = kernel.T @ q
 
-            gradient = (
-                (short_state - z.expand(-1, router.num_prototypes))
-                * q.unsqueeze(0)
-                + router.lambda_sa * (short_state - router.anchors)
+            gradient = (short_state - z.expand(-1, router.num_prototypes)) * q.unsqueeze(0) + router.lambda_sa * (
+                short_state - router.anchors
             )
             candidate = short_state - router.state_step_size * gradient
             norms = torch.linalg.vector_norm(candidate, dim=0, keepdim=True)
-            short_state = candidate / torch.maximum(
-                torch.ones_like(norms), norms / router.state_radius
-            )
+            short_state = candidate / torch.maximum(torch.ones_like(norms), norms / router.state_radius)
             responsibility = router.rho_beta * responsibility + q
     return result
 
@@ -99,20 +88,12 @@ def column_vector_oracle(router, hidden_states, valid_mask=None):
 def test_config_derives_k_and_authoritative_defaults():
     config = tiny_config()
     assert config.cpt_num_prototypes == 2 * config.num_local_experts == 6
-    assert config.cpt_kappa_beta == pytest.approx(
-        1.0 / (6 * (1.0 - config.cpt_rho_beta)), rel=2e-6
-    )
+    assert config.cpt_kappa_beta == pytest.approx(1.0 / (6 * (1.0 - config.cpt_rho_beta)), rel=2e-6)
     assert config.cpt_lambda_sa == pytest.approx(1.0 / 6, rel=2e-6)
     assert config.cpt_prototype_temperature == pytest.approx(0.5)
-    assert config.cpt_state_step_size == pytest.approx(
-        0.1 / (1.0 + 1.0 / 6), rel=2e-6
-    )
-    assert config.cpt_energy_init_scale == pytest.approx(
-        0.05 * config.cpt_expert_temperature
-    )
-    assert config.cpt_price_learning_rate == pytest.approx(
-        1e-2 * config.cpt_expert_temperature
-    )
+    assert config.cpt_state_step_size == pytest.approx(0.1 / (1.0 + 1.0 / 6), rel=2e-6)
+    assert config.cpt_energy_init_scale == pytest.approx(0.05 * config.cpt_expert_temperature)
+    assert config.cpt_price_learning_rate == pytest.approx(1e-2 * config.cpt_expert_temperature)
 
 
 @pytest.mark.parametrize(
@@ -194,31 +175,35 @@ def test_token_major_forward_matches_column_vector_oracle(seed):
     actual = router(hidden, mask).probabilities
     expected = column_vector_oracle(router, hidden, mask)
     torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
-    torch.testing.assert_close(
-        actual[mask].sum(dim=-1), torch.ones(int(mask.sum())), atol=2e-6, rtol=0
-    )
+    torch.testing.assert_close(actual[mask].sum(dim=-1), torch.ones(int(mask.sum())), atol=2e-6, rtol=0)
     assert torch.equal(actual[~mask], torch.zeros_like(actual[~mask]))
 
 
 def test_one_chunk_routes_tokens_in_parallel_from_the_entry_state():
     torch.manual_seed(19)
-    router = CPTRouter(tiny_config(cpt_state_chunk_size=8), layer_index=0)
+    router = CPTRouter(
+        tiny_config(cpt_state_chunk_size=8, cpt_state_corrector=False),
+        layer_index=0,
+    )
     hidden = torch.randn(2, 6, router.hidden_size)
     mask = torch.tensor([[1, 1, 0, 1, 1, 0], [0, 1, 1, 0, 1, 1]], dtype=torch.bool)
 
     actual = router(hidden, mask).probabilities
     expected = torch.zeros_like(actual)
     for batch_index, position in mask.nonzero().tolist():
-        expected[batch_index, position] = router(
-            hidden[batch_index : batch_index + 1, position : position + 1]
-        ).probabilities[0, 0]
+        expected[batch_index, position] = router(hidden[batch_index : batch_index + 1, position : position + 1]).probabilities[
+            0, 0
+        ]
 
     torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
 
 
 def test_chunk_state_changes_only_later_chunks():
     torch.manual_seed(23)
-    router = CPTRouter(tiny_config(cpt_state_chunk_size=2), layer_index=0)
+    router = CPTRouter(
+        tiny_config(cpt_state_chunk_size=2, cpt_state_corrector=False),
+        layer_index=0,
+    )
     hidden = torch.randn(1, 4, router.hidden_size)
     changed = hidden.clone()
     changed[:, 0] = changed[:, 0] * -7.0 + 3.0
@@ -270,13 +255,16 @@ def test_blockwise_router_preserves_probability_mass_padding_and_gradients():
         assert torch.isfinite(parameter.grad).all()
 
 
-def test_corrector_defaults_to_off():
-    assert tiny_config().cpt_state_corrector is False
+def test_corrector_defaults_to_on():
+    assert tiny_config().cpt_state_corrector is True
 
 
 def test_corrector_is_exact_for_single_token_chunks():
     torch.manual_seed(41)
-    standard = CPTRouter(tiny_config(cpt_state_chunk_size=1), layer_index=0)
+    standard = CPTRouter(
+        tiny_config(cpt_state_chunk_size=1, cpt_state_corrector=False),
+        layer_index=0,
+    )
     corrected = CPTRouter(
         tiny_config(cpt_state_chunk_size=1, cpt_state_corrector=True),
         layer_index=0,
@@ -306,14 +294,9 @@ def test_corrector_improves_fidelity_to_strict_v1():
         )
         probabilities = router(hidden, mask).probabilities.detach()
         valid = mask.unsqueeze(-1).expand_as(probabilities)
-        return (
-            (probabilities[valid] - reference_probabilities[valid])
-            .abs()
-            .mean()
-            .item()
-        )
+        return (probabilities[valid] - reference_probabilities[valid]).abs().mean().item()
 
-    plain_error = mean_error()
+    plain_error = mean_error(cpt_state_corrector=False)
     corrected_error = mean_error(cpt_state_corrector=True)
     assert plain_error > 0
     assert corrected_error < 0.5 * plain_error
@@ -376,12 +359,8 @@ def test_strict_v1_projection_has_no_projection_softmax():
     projected = router.projection @ hidden[0, 0].float().unsqueeze(1)
     wrong_z = torch.softmax(projected.squeeze(1), dim=0)
     wrong_z = wrong_z / torch.linalg.vector_norm(wrong_z).clamp_min(router.eps_z)
-    prototypes = router.anchors / torch.linalg.vector_norm(
-        router.anchors, dim=0, keepdim=True
-    ).clamp_min(router.eps_m)
-    wrong_q = torch.softmax(
-        prototypes.T @ wrong_z / router.prototype_temperature, dim=0
-    )
+    prototypes = router.anchors / torch.linalg.vector_norm(router.anchors, dim=0, keepdim=True).clamp_min(router.eps_m)
+    wrong_q = torch.softmax(prototypes.T @ wrong_z / router.prototype_temperature, dim=0)
     wrong_pi = router.expert_kernel().T @ wrong_q
     assert not torch.allclose(actual, wrong_pi, atol=1e-5, rtol=1e-5)
 
@@ -470,12 +449,7 @@ def test_batch_rows_are_independent_and_router_is_causal():
     router = CPTRouter(tiny_config(), layer_index=1)
     hidden = torch.randn(2, 5, router.hidden_size)
     batched = router(hidden).probabilities
-    separate = torch.cat(
-        [
-            router(hidden[index : index + 1]).probabilities
-            for index in range(hidden.shape[0])
-        ]
-    )
+    separate = torch.cat([router(hidden[index : index + 1]).probabilities for index in range(hidden.shape[0])])
     torch.testing.assert_close(batched, separate, atol=2e-6, rtol=2e-6)
 
     changed = hidden.clone()
@@ -525,9 +499,7 @@ def test_native_model_keeps_upstream_interfaces_and_zero_aux_loss():
     input_ids = torch.randint(0, model.config.vocab_size, (2, 6))
     labels = torch.randint(0, model.config.vocab_size, (2, 6))
     output = model(input_ids, labels=labels)
-    ce = F.cross_entropy(
-        output["logits"].reshape(-1, model.config.vocab_size), labels.reshape(-1)
-    )
+    ce = F.cross_entropy(output["logits"].reshape(-1, model.config.vocab_size), labels.reshape(-1))
     assert output["aux_loss"].dtype == torch.float32
     assert not output["aux_loss"].requires_grad
     assert output["aux_loss"].item() == 0.0
@@ -536,17 +508,22 @@ def test_native_model_keeps_upstream_interfaces_and_zero_aux_loss():
     for coefficient in (12345.0, float("inf"), float("nan")):
         model.config.router_aux_loss_coef = coefficient
         output_with_arbitrary_coef = model(input_ids, labels=labels)
-        torch.testing.assert_close(
-            output_with_arbitrary_coef["loss"], ce, atol=0, rtol=0
-        )
+        torch.testing.assert_close(output_with_arbitrary_coef["loss"], ce, atol=0, rtol=0)
     assert all(not hasattr(layer.moe, "router") for layer in model.layers)
     assert all(hasattr(layer.moe, "cpt_router") for layer in model.layers)
 
     assert tuple(inspect.signature(GQAAttention.forward).parameters) == (
-        "self", "hidden_states", "attention_mask", "position_ids"
+        "self",
+        "hidden_states",
+        "attention_mask",
+        "position_ids",
     )
     assert tuple(inspect.signature(TinyMixtralForCausalLM.forward).parameters) == (
-        "self", "input_ids", "attention_mask", "labels", "return_dict"
+        "self",
+        "input_ids",
+        "attention_mask",
+        "labels",
+        "return_dict",
     )
 
 
@@ -563,17 +540,11 @@ def test_activation_checkpointing_matches_plain_forward_and_gradients():
 
     plain_output = plain(input_ids, labels=labels)
     checkpoint_output = checkpointed(input_ids, labels=labels)
-    torch.testing.assert_close(
-        checkpoint_output["logits"], plain_output["logits"], atol=0, rtol=0
-    )
+    torch.testing.assert_close(checkpoint_output["logits"], plain_output["logits"], atol=0, rtol=0)
     plain_output["loss"].backward()
     checkpoint_output["loss"].backward()
-    for plain_parameter, checkpoint_parameter in zip(
-        plain.cpt_trainable_parameters(), checkpointed.cpt_trainable_parameters()
-    ):
-        torch.testing.assert_close(
-            checkpoint_parameter.grad, plain_parameter.grad, atol=2e-6, rtol=2e-5
-        )
+    for plain_parameter, checkpoint_parameter in zip(plain.cpt_trainable_parameters(), checkpointed.cpt_trainable_parameters()):
+        torch.testing.assert_close(checkpoint_parameter.grad, plain_parameter.grad, atol=2e-6, rtol=2e-5)
     assert plain.get_cpt_state_version() == checkpointed.get_cpt_state_version() == 0
 
 

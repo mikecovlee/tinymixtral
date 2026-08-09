@@ -64,18 +64,13 @@ def tiny_config(**overrides):
 
 
 def clone_state_dict(model):
-    return OrderedDict(
-        (key, value.detach().clone())
-        for key, value in model.state_dict().items()
-    )
+    return OrderedDict((key, value.detach().clone()) for key, value in model.state_dict().items())
 
 
 def training_step(model, optimizer, scheduler, input_ids):
     output = model(input_ids, labels=input_ids)
     output["loss"].backward()
-    _execute_cpt_optimizer_step(
-        model, optimizer, scheduler, output["cpt_transaction"]
-    )
+    _execute_cpt_optimizer_step(model, optimizer, scheduler, output["cpt_transaction"])
     optimizer.zero_grad(set_to_none=True)
     return output
 
@@ -90,9 +85,7 @@ def rebuild_scheduler(optimizer, state, schedule_kind, decay_ratio=0.1):
             decay_ratio=decay_ratio,
         )
     else:
-        scheduler = make_cosine_schedule(
-            optimizer, state["warmup_steps"], state["total_steps"]
-        )
+        scheduler = make_cosine_schedule(optimizer, state["warmup_steps"], state["total_steps"])
     for group, lr in zip(optimizer.param_groups, saved_lrs):
         group["lr"] = lr
     scheduler.load_state_dict(state["sched"])
@@ -114,9 +107,7 @@ def serialized_parameter_id_for(optimizer, optimizer_state, target_parameter):
 
 
 def cpt_parameter_bindings_for(model, optimizer, optimizer_state):
-    cpt_parameter_ids = {
-        id(parameter) for parameter in model.cpt_trainable_parameters()
-    }
+    cpt_parameter_ids = {id(parameter) for parameter in model.cpt_trainable_parameters()}
     return tuple(
         (
             name,
@@ -263,9 +254,7 @@ def test_model_checkpoint_round_trip_contains_all_cpt_parameters_and_state(tmp_p
     assert validate_cpt_resume_state(state, loaded, loaded_optimizer) == 1
     assert state["cpt_state_version"] == 1
     assert state["cpt_optimizer_state_dtype"] == "float32"
-    cpt_parameter_ids = {
-        id(parameter) for parameter in model.cpt_trainable_parameters()
-    }
+    cpt_parameter_ids = {id(parameter) for parameter in model.cpt_trainable_parameters()}
     expected_presence = tuple(
         name
         for name, parameter in model.named_parameters()
@@ -296,9 +285,19 @@ def test_training_state_adds_only_minimal_cpt_fields_to_upstream_schema(tmp_path
     )
     state = torch.load(path, weights_only=True)
     assert set(state) == {
-        "opt", "sched", "step", "total_tok", "warmup_steps", "total_steps",
-        "fi", "ptr", "batch_size", "seq_len", "cpt_state_version",
-        "cpt_optimizer_state_presence", "cpt_optimizer_parameter_bindings",
+        "opt",
+        "sched",
+        "step",
+        "total_tok",
+        "warmup_steps",
+        "total_steps",
+        "fi",
+        "ptr",
+        "batch_size",
+        "seq_len",
+        "cpt_state_version",
+        "cpt_optimizer_state_presence",
+        "cpt_optimizer_parameter_bindings",
         "cpt_optimizer_state_dtype",
     }
     assert state["cpt_optimizer_state_dtype"] == "float32"
@@ -307,24 +306,16 @@ def test_training_state_adds_only_minimal_cpt_fields_to_upstream_schema(tmp_path
 
 @pytest.mark.parametrize("bf16_states", [False, True])
 @pytest.mark.parametrize("schedule_kind", ["cosine", "wsd"])
-def test_uninterrupted_and_resumed_next_step_match(
-    tmp_path, bf16_states, schedule_kind
-):
+def test_uninterrupted_and_resumed_next_step_match(tmp_path, bf16_states, schedule_kind):
     torch.manual_seed(7)
     model = TinyMixtralForCausalLM(tiny_config())
-    optimizer = make_adamw(
-        model, lr=3e-4, weight_decay=0.01, bf16_states=bf16_states
-    )
+    optimizer = make_adamw(model, lr=3e-4, weight_decay=0.01, bf16_states=bf16_states)
     scheduler = (
-        make_wsd_schedule(optimizer, 1, 4, decay_ratio=0.5)
-        if schedule_kind == "wsd"
-        else make_cosine_schedule(optimizer, 1, 4)
+        make_wsd_schedule(optimizer, 1, 4, decay_ratio=0.5) if schedule_kind == "wsd" else make_cosine_schedule(optimizer, 1, 4)
     )
     first_batch = torch.randint(0, model.config.vocab_size, (2, 5))
     training_step(model, optimizer, scheduler, first_batch)
-    checkpoint = save_checkpoint(
-        model, optimizer, scheduler, tmp_path, 1, 10, 1, 4, 0, 12, 2, 5
-    )
+    checkpoint = save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 10, 1, 4, 0, 12, 2, 5)
 
     resumed = TinyMixtralForCausalLM.from_pretrained(str(checkpoint))
     state = torch.load(checkpoint / "training_state.pt", weights_only=True)
@@ -342,19 +333,13 @@ def test_uninterrupted_and_resumed_next_step_match(
         expected_presence=state["cpt_optimizer_state_presence"],
         expected_state_dtype=state["cpt_optimizer_state_dtype"],
     )
-    resumed_scheduler = rebuild_scheduler(
-        resumed_optimizer, state, schedule_kind, decay_ratio=0.5
-    )
+    resumed_scheduler = rebuild_scheduler(resumed_optimizer, state, schedule_kind, decay_ratio=0.5)
 
     second_batch = torch.randint(0, model.config.vocab_size, (2, 5))
     original_output = model(second_batch, labels=second_batch)
     resumed_output = resumed(second_batch, labels=second_batch)
-    torch.testing.assert_close(
-        resumed_output["logits"], original_output["logits"], atol=0, rtol=0
-    )
-    torch.testing.assert_close(
-        resumed_output["loss"], original_output["loss"], atol=0, rtol=0
-    )
+    torch.testing.assert_close(resumed_output["logits"], original_output["logits"], atol=0, rtol=0)
+    torch.testing.assert_close(resumed_output["loss"], original_output["loss"], atol=0, rtol=0)
     for original, restored in zip(
         original_output["cpt_transaction"].proposals,
         resumed_output["cpt_transaction"].proposals,
@@ -365,18 +350,12 @@ def test_uninterrupted_and_resumed_next_step_match(
 
     original_output["loss"].backward()
     resumed_output["loss"].backward()
-    for original_parameter, resumed_parameter in zip(
-        model.parameters(), resumed.parameters()
-    ):
+    for original_parameter, resumed_parameter in zip(model.parameters(), resumed.parameters()):
         if original_parameter.grad is None:
             assert resumed_parameter.grad is None
         else:
-            torch.testing.assert_close(
-                resumed_parameter.grad, original_parameter.grad, atol=0, rtol=0
-            )
-    _execute_cpt_optimizer_step(
-        model, optimizer, scheduler, original_output["cpt_transaction"]
-    )
+            torch.testing.assert_close(resumed_parameter.grad, original_parameter.grad, atol=0, rtol=0)
+    _execute_cpt_optimizer_step(model, optimizer, scheduler, original_output["cpt_transaction"])
     _execute_cpt_optimizer_step(
         resumed,
         resumed_optimizer,
@@ -415,9 +394,7 @@ def mutation_cases(model):
     yield "non-finite", nonfinite
 
     bad_algorithm = OrderedDict(base)
-    algorithm_key = next(
-        key for key in cpt_keys if key.endswith(".router_algorithm_version")
-    )
+    algorithm_key = next(key for key in cpt_keys if key.endswith(".router_algorithm_version"))
     bad_algorithm[algorithm_key] = torch.tensor(2, dtype=torch.int64)
     yield "unsupported CPT algorithm", bad_algorithm
 
@@ -438,9 +415,7 @@ def mutation_cases(model):
     yield "versions disagree", mismatched_versions
 
     negative_optimizer_step = OrderedDict(base)
-    optimizer_step_keys = [
-        key for key in cpt_keys if key.endswith(".optimizer_step")
-    ]
+    optimizer_step_keys = [key for key in cpt_keys if key.endswith(".optimizer_step")]
     negative_optimizer_step[optimizer_step_keys[0]] = torch.tensor(
         -1,
         dtype=torch.int64,
@@ -463,9 +438,7 @@ def mutation_cases(model):
     yield "optimizer_step exceeds state_version", optimizer_step_ahead
 
     legacy = OrderedDict(base)
-    legacy["layers.0.moe.router.weight"] = torch.zeros(
-        model.config.num_local_experts, model.config.hidden_size
-    )
+    legacy["layers.0.moe.router.weight"] = torch.zeros(model.config.num_local_experts, model.config.hidden_size)
     yield "legacy Linear Router", legacy
 
 
@@ -587,9 +560,7 @@ def test_checkpoint_config_requires_routing_architecture_field(field, tmp_path):
         ("num_experts_per_tok", True),
     ],
 )
-def test_checkpoint_config_rejects_non_integer_routing_architecture(
-    field, invalid_value, tmp_path
-):
+def test_checkpoint_config_rejects_non_integer_routing_architecture(field, invalid_value, tmp_path):
     model = TinyMixtralForCausalLM(tiny_config())
     model.save_pretrained(tmp_path)
     config_path = tmp_path / "config.json"
@@ -659,9 +630,7 @@ def test_checkpoint_rejects_optimizer_missing_this_models_cpt_parameters(tmp_pat
     optimizer = make_adamw(foreign_model, lr=1e-3, weight_decay=0.0)
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     with pytest.raises(RuntimeError, match="every CPT learnable parameter"):
-        save_checkpoint(
-            model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5
-        )
+        save_checkpoint(model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5)
 
 
 def test_checkpoint_rejects_cpt_config_mutation_after_model_construction(tmp_path):
@@ -670,9 +639,7 @@ def test_checkpoint_rejects_cpt_config_mutation_after_model_construction(tmp_pat
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     model.config.cpt_prototype_temperature = 0.75
     with pytest.raises(RuntimeError, match="config changed after construction"):
-        save_checkpoint(
-            model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5
-        )
+        save_checkpoint(model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5)
 
 
 @pytest.mark.parametrize(
@@ -685,9 +652,7 @@ def test_checkpoint_rejects_cpt_config_mutation_after_model_construction(tmp_pat
         ("num_experts_per_tok", 2.0),
     ],
 )
-def test_router_config_binding_rejects_cross_type_equality(
-    field, equal_value_with_wrong_type
-):
+def test_router_config_binding_rejects_cross_type_equality(field, equal_value_with_wrong_type):
     model = TinyMixtralForCausalLM(tiny_config())
     setattr(model.config, field, equal_value_with_wrong_type)
     with pytest.raises(RuntimeError, match="config changed after construction"):
@@ -700,9 +665,7 @@ def test_checkpoint_rejects_top_k_mutation_after_model_construction(tmp_path):
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     model.config.num_experts_per_tok = 1
     with pytest.raises(RuntimeError, match="num_experts_per_tok"):
-        save_checkpoint(
-            model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5
-        )
+        save_checkpoint(model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5)
 
 
 def test_checkpoint_rejects_live_top_k_mutation(tmp_path):
@@ -711,9 +674,7 @@ def test_checkpoint_rejects_live_top_k_mutation(tmp_path):
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     model.layers[0].moe.top_k = 1
     with pytest.raises(RuntimeError, match="Top-k"):
-        save_checkpoint(
-            model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5
-        )
+        save_checkpoint(model, optimizer, scheduler, tmp_path, 0, 0, 0, 2, 0, 0, 2, 5)
 
 
 def test_nonfinite_optimizer_moment_is_rejected_before_checkpoint(tmp_path):
@@ -725,9 +686,7 @@ def test_nonfinite_optimizer_moment_is_rejected_before_checkpoint(tmp_path):
     parameter = model.cpt_trainable_parameters()[0]
     optimizer.state[parameter]["exp_avg"].view(-1)[0] = float("nan")
     with pytest.raises(RuntimeError, match="non-finite"):
-        save_checkpoint(
-            model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5
-        )
+        save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5)
 
 
 def test_incomplete_initialized_cpt_optimizer_state_is_rejected():
@@ -748,9 +707,7 @@ def test_resume_rejects_deleted_cpt_optimizer_state_entry(tmp_path):
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     input_ids = torch.randint(0, model.config.vocab_size, (2, 5))
     training_step(model, optimizer, scheduler, input_ids)
-    checkpoint = save_checkpoint(
-        model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5
-    )
+    checkpoint = save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5)
     state = torch.load(checkpoint / "training_state.pt", weights_only=True)
     target = model.cpt_trainable_parameters()[0]
     serialized_parameter_id = serialized_parameter_id_for(
@@ -807,9 +764,7 @@ def test_transparent_wrapper_keeps_canonical_checkpoint_names(tmp_path):
     wrapped = TransparentModuleWrapper(model)
     assert validate_cpt_optimizer_state(wrapped, optimizer) == expected_presence
 
-    checkpoint = save_checkpoint(
-        wrapped, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5
-    )
+    checkpoint = save_checkpoint(wrapped, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5)
     serialized_model = torch.load(
         checkpoint / "pytorch_model.bin",
         weights_only=True,
@@ -818,11 +773,14 @@ def test_transparent_wrapper_keeps_canonical_checkpoint_names(tmp_path):
     reloaded = TinyMixtralForCausalLM.from_pretrained(str(checkpoint))
     state = torch.load(checkpoint / "training_state.pt", weights_only=True)
     reloaded_optimizer = make_adamw(reloaded, lr=1e-3, weight_decay=0.0)
-    assert validate_cpt_resume_state(
-        state,
-        reloaded,
-        reloaded_optimizer,
-    ) == 1
+    assert (
+        validate_cpt_resume_state(
+            state,
+            reloaded,
+            reloaded_optimizer,
+        )
+        == 1
+    )
     assert state["cpt_optimizer_state_presence"] == expected_presence
 
 
@@ -853,9 +811,7 @@ def test_all_padding_step_preserves_lazy_cpt_optimizer_resume(tmp_path):
     assert model.get_cpt_optimizer_step() == 0
     assert all(parameter not in optimizer.state for parameter in cpt_parameters)
 
-    checkpoint = save_checkpoint(
-        model, optimizer, scheduler, tmp_path, 1, 10, 0, 3, 0, 12, 2, 5
-    )
+    checkpoint = save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 10, 0, 3, 0, 12, 2, 5)
     resumed = TinyMixtralForCausalLM.from_pretrained(str(checkpoint))
     state = torch.load(checkpoint / "training_state.pt", weights_only=True)
     assert state["cpt_optimizer_state_presence"] == ()
@@ -891,10 +847,7 @@ def test_all_padding_step_preserves_lazy_cpt_optimizer_resume(tmp_path):
         expected_presence=state["cpt_optimizer_state_presence"],
         expected_state_dtype=state["cpt_optimizer_state_dtype"],
     )
-    assert all(
-        parameter not in resumed_optimizer.state
-        for parameter in resumed.cpt_trainable_parameters()
-    )
+    assert all(parameter not in resumed_optimizer.state for parameter in resumed.cpt_trainable_parameters())
     assert resumed.get_cpt_optimizer_step() == 0
     resumed_scheduler = rebuild_scheduler(
         resumed_optimizer,
@@ -972,11 +925,7 @@ def test_missing_ordinary_expert_optimizer_state_is_not_a_cpt_error():
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     input_ids = torch.randint(0, model.config.vocab_size, (2, 5))
     training_step(model, optimizer, scheduler, input_ids)
-    ordinary_expert = next(
-        parameter
-        for name, parameter in model.named_parameters()
-        if name.endswith(".moe.gate_proj")
-    )
+    ordinary_expert = next(parameter for name, parameter in model.named_parameters() if name.endswith(".moe.gate_proj"))
     optimizer.state.pop(ordinary_expert, None)
     validate_cpt_optimizer_state(model, optimizer)
 
@@ -992,9 +941,7 @@ def test_bf16_optimizer_load_restores_bf16_moment_storage():
 
     restored_model = TinyMixtralForCausalLM(tiny_config(num_hidden_layers=1))
     restored_model.load_state_dict(model.state_dict())
-    restored = make_adamw(
-        restored_model, lr=1e-3, weight_decay=0.0, bf16_states=True
-    )
+    restored = make_adamw(restored_model, lr=1e-3, weight_decay=0.0, bf16_states=True)
     restored.load_state_dict(payload)
     validate_cpt_optimizer_state(
         restored_model,
@@ -1024,22 +971,12 @@ def test_bf16_optimizer_load_preserves_large_steps_with_sparse_ids():
     source_optimizer.step()
     payload = source_optimizer.state_dict()
 
-    old_ids = [
-        serialized_id
-        for group in payload["param_groups"]
-        for serialized_id in group["params"]
-    ]
+    old_ids = [serialized_id for group in payload["param_groups"] for serialized_id in group["params"]]
     new_ids = (11, 29)
     id_remap = dict(zip(old_ids, new_ids))
-    payload["state"] = {
-        id_remap[serialized_id]: state
-        for serialized_id, state in payload["state"].items()
-    }
+    payload["state"] = {id_remap[serialized_id]: state for serialized_id, state in payload["state"].items()}
     for group in payload["param_groups"]:
-        group["params"] = [
-            id_remap[serialized_id]
-            for serialized_id in group["params"]
-        ]
+        group["params"] = [id_remap[serialized_id] for serialized_id in group["params"]]
     exact_steps = (16_777_217, 16_777_219)
     for serialized_id, exact_step in zip(new_ids, exact_steps):
         payload["state"][serialized_id]["step"] = exact_step
@@ -1086,9 +1023,7 @@ def test_resume_rejects_optimizer_state_dtype_change_before_load(
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     input_ids = torch.randint(0, model.config.vocab_size, (2, 5))
     training_step(model, optimizer, scheduler, input_ids)
-    checkpoint = save_checkpoint(
-        model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5
-    )
+    checkpoint = save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5)
 
     state = torch.load(checkpoint / "training_state.pt", weights_only=True)
     assert state["cpt_optimizer_state_dtype"] == saved_dtype
@@ -1128,9 +1063,7 @@ def test_resume_rejects_raw_cpt_moment_dtype_mismatch_before_load(
     scheduler = make_cosine_schedule(optimizer, 0, 2)
     input_ids = torch.randint(0, model.config.vocab_size, (2, 5))
     training_step(model, optimizer, scheduler, input_ids)
-    checkpoint = save_checkpoint(
-        model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5
-    )
+    checkpoint = save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 10, 0, 2, 0, 12, 2, 5)
 
     state = torch.load(checkpoint / "training_state.pt", weights_only=True)
     target = model.cpt_trainable_parameters()[0]
@@ -1180,35 +1113,28 @@ def test_production_restore_helper_supports_grouped_and_legacy_adamw(
     )
     assert used_legacy_fallback is legacy_single_group
     assert (restored_optimizer is resumed_optimizer) is not legacy_single_group
-    assert type(restored_optimizer) is (
-        BF16AdamW if bf16_states else torch.optim.AdamW
+    assert type(restored_optimizer) is (BF16AdamW if bf16_states else torch.optim.AdamW)
+    assert (
+        validate_cpt_optimizer_state(
+            resumed_model,
+            restored_optimizer,
+            expected_presence=state["cpt_optimizer_state_presence"],
+            expected_state_dtype=state["cpt_optimizer_state_dtype"],
+        )
+        == state["cpt_optimizer_state_presence"]
     )
-    assert validate_cpt_optimizer_state(
-        resumed_model,
-        restored_optimizer,
-        expected_presence=state["cpt_optimizer_state_presence"],
-        expected_state_dtype=state["cpt_optimizer_state_dtype"],
-    ) == state["cpt_optimizer_state_presence"]
 
 
 def test_resume_rejects_permuted_cpt_serialized_ids_before_load(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     projection_ids = [
-        serialized_id
-        for name, serialized_id in state["cpt_optimizer_parameter_bindings"]
-        if name.endswith(".projection")
+        serialized_id for name, serialized_id in state["cpt_optimizer_parameter_bindings"] if name.endswith(".projection")
     ]
     assert len(projection_ids) == 2
     first_id, second_id = projection_ids
     for group in state["opt"]["param_groups"]:
         group["params"] = [
-            second_id
-            if serialized_id == first_id
-            else first_id
-            if serialized_id == second_id
-            else serialized_id
+            second_id if serialized_id == first_id else first_id if serialized_id == second_id else serialized_id
             for serialized_id in group["params"]
         ]
     assert_restore_rejected_before_load(
@@ -1220,9 +1146,7 @@ def test_resume_rejects_permuted_cpt_serialized_ids_before_load(tmp_path):
 
 
 def test_resume_rejects_cpt_parameter_binding_drift_before_load(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     bindings = list(state["cpt_optimizer_parameter_bindings"])
     first_name, first_id = bindings[0]
     second_name, second_id = bindings[1]
@@ -1238,16 +1162,10 @@ def test_resume_rejects_cpt_parameter_binding_drift_before_load(tmp_path):
 
 
 def test_resume_rejects_cpt_entry_and_manifest_deleted_together(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     target_name, target_id = state["cpt_optimizer_parameter_bindings"][0]
     state["opt"]["state"].pop(target_id)
-    state["cpt_optimizer_state_presence"] = tuple(
-        name
-        for name in state["cpt_optimizer_state_presence"]
-        if name != target_name
-    )
+    state["cpt_optimizer_state_presence"] = tuple(name for name in state["cpt_optimizer_state_presence"] if name != target_name)
     assert_restore_rejected_before_load(
         state,
         resumed_model,
@@ -1257,9 +1175,7 @@ def test_resume_rejects_cpt_entry_and_manifest_deleted_together(tmp_path):
 
 
 def test_resume_rejects_all_cpt_entries_and_manifest_deleted_together(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     for _, serialized_id in state["cpt_optimizer_parameter_bindings"]:
         state["opt"]["state"].pop(serialized_id)
     state["cpt_optimizer_state_presence"] = ()
@@ -1292,9 +1208,7 @@ def test_resume_rejects_disagreeing_cpt_optimizer_steps_before_load(tmp_path):
 
 
 def test_resume_rejects_all_cpt_steps_drifted_from_model_step(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     for router in resumed_model._cpt_routers():
         router.state_version.fill_(2)
     state["cpt_state_version"] = 2
@@ -1325,9 +1239,7 @@ def test_resume_rejects_cpt_steps_outside_state_version(
     saved_step,
     match,
 ):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     for _, serialized_id in state["cpt_optimizer_parameter_bindings"]:
         state["opt"]["state"][serialized_id]["step"] = torch.tensor(
             saved_step,
@@ -1383,9 +1295,7 @@ def test_resume_rejects_noncanonical_cpt_step_representation_before_load(
 
 
 def test_resume_rejects_unknown_cpt_training_metadata_before_load(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     state["cpt_future_schema"] = 1
     assert_restore_rejected_before_load(
         state,
@@ -1396,9 +1306,7 @@ def test_resume_rejects_unknown_cpt_training_metadata_before_load(tmp_path):
 
 
 def test_resume_allows_ordinary_future_training_metadata(tmp_path):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     state["future_upstream_metadata"] = {"schema": 1}
     restored_optimizer, used_legacy_fallback = restore_cpt_optimizer_state(
         state,
@@ -1511,23 +1419,15 @@ def test_resume_rejects_malformed_optimizer_payload_before_load(
     mutation,
     match,
 ):
-    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(
-        tmp_path
-    )
+    _, _, _, state, resumed_model, resumed_optimizer = make_resume_case(tmp_path)
     optimizer_state = state["opt"]
     first_group = optimizer_state["param_groups"][0]
     _, first_cpt_id = state["cpt_optimizer_parameter_bindings"][0]
     if mutation == "optimizer_top_level":
         optimizer_state["future"] = None
     elif mutation == "orphan_state":
-        orphan_id = max(
-            serialized_id
-            for group in optimizer_state["param_groups"]
-            for serialized_id in group["params"]
-        ) + 1
-        optimizer_state["state"][orphan_id] = copy.deepcopy(
-            optimizer_state["state"][first_cpt_id]
-        )
+        orphan_id = max(serialized_id for group in optimizer_state["param_groups"] for serialized_id in group["params"]) + 1
+        optimizer_state["state"][orphan_id] = copy.deepcopy(optimizer_state["state"][first_cpt_id])
     elif mutation == "group_unknown":
         first_group["future"] = None
     elif mutation == "group_missing":
@@ -1541,9 +1441,7 @@ def test_resume_rejects_malformed_optimizer_payload_before_load(
     elif mutation == "duplicate_parameter_id":
         first_group["params"][1] = first_group["params"][0]
     elif mutation == "extra_parameter_group":
-        optimizer_state["param_groups"].append(
-            copy.deepcopy(optimizer_state["param_groups"][-1])
-        )
+        optimizer_state["param_groups"].append(copy.deepcopy(optimizer_state["param_groups"][-1]))
     elif mutation == "cpt_entry_extra":
         optimizer_state["state"][first_cpt_id]["future"] = None
     else:
@@ -1597,9 +1495,7 @@ def test_legacy_single_group_optimizer_preserves_cpt_manifest(bf16_states):
     presence = validate_cpt_optimizer_state(model, optimizer)
     payload = optimizer.state_dict()
 
-    restored_model = TinyMixtralForCausalLM(
-        tiny_config(num_hidden_layers=1)
-    )
+    restored_model = TinyMixtralForCausalLM(tiny_config(num_hidden_layers=1))
     restored_model.load_state_dict(model.state_dict())
     grouped_optimizer = make_adamw(
         restored_model,
@@ -1768,9 +1664,7 @@ def test_cuda_bf16_native_step_checkpoint_and_reload(tmp_path):
     torch.manual_seed(17)
     model = TinyMixtralForCausalLM(tiny_config()).to("cuda").to(torch.bfloat16)
     model.gradient_checkpointing_enable()
-    optimizer = make_adamw(
-        model, lr=2e-4, weight_decay=0.01, bf16_states=True
-    )
+    optimizer = make_adamw(model, lr=2e-4, weight_decay=0.01, bf16_states=True)
     scheduler = make_cosine_schedule(optimizer, 0, 3)
     input_ids = torch.randint(0, model.config.vocab_size, (2, 6), device="cuda")
     with torch.amp.autocast("cuda", dtype=torch.bfloat16):
@@ -1779,9 +1673,7 @@ def test_cuda_bf16_native_step_checkpoint_and_reload(tmp_path):
     output["loss"].backward()
     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     assert torch.isfinite(grad_norm)
-    _execute_cpt_optimizer_step(
-        model, optimizer, scheduler, output["cpt_transaction"]
-    )
+    _execute_cpt_optimizer_step(model, optimizer, scheduler, output["cpt_transaction"])
     optimizer.zero_grad(set_to_none=True)
     assert model.get_cpt_state_version() == 1
     for router in model._cpt_routers():
@@ -1791,9 +1683,7 @@ def test_cuda_bf16_native_step_checkpoint_and_reload(tmp_path):
             assert optimizer.state[parameter]["exp_avg"].dtype == torch.bfloat16
             assert optimizer.state[parameter]["exp_avg_sq"].dtype == torch.bfloat16
 
-    checkpoint = save_checkpoint(
-        model, optimizer, scheduler, tmp_path, 1, 12, 0, 3, 0, 14, 2, 6
-    )
+    checkpoint = save_checkpoint(model, optimizer, scheduler, tmp_path, 1, 12, 0, 3, 0, 14, 2, 6)
     reloaded = TinyMixtralForCausalLM.from_pretrained(str(checkpoint))
     assert reloaded.get_cpt_state_version() == 1
     for key, value in model.state_dict().items():

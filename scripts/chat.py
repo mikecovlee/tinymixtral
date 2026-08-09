@@ -16,8 +16,9 @@ import torch
 import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.modeling import TinyMixtralForCausalLM
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer  # noqa: E402
+
+from model.modeling import TinyMixtralForCausalLM  # noqa: E402
 
 
 def generate(model, tokenizer, prompt, max_new_tokens=256, temperature=0.7, top_p=0.9):
@@ -91,7 +92,8 @@ def main():
     # 加载
     device = torch.device(args.device)
     if not torch.cuda.is_available() and device.type == "cuda":
-        print("CUDA not available, falling back to CPU"); device = torch.device("cpu")
+        print("CUDA not available, falling back to CPU")
+        device = torch.device("cpu")
     print(f"Loading model from {args.checkpoint} ...")
     model = TinyMixtralForCausalLM.from_pretrained(args.checkpoint)
     model.eval()
@@ -103,10 +105,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, legacy=False)
     if len(tokenizer) != model.config.vocab_size:
-        p.error(
-            f"tokenizer vocab size is {len(tokenizer)}, "
-            f"model expects {model.config.vocab_size}"
-        )
+        p.error(f"tokenizer vocab size is {len(tokenizer)}, " f"model expects {model.config.vocab_size}")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

@@ -15,13 +15,14 @@ operation is ``pi_t.T = q_t.T @ B``.  There is deliberately no softmax
 after this product. Tokens in one state chunk share its entry state and are
 routed in parallel; setting ``cpt_state_chunk_size=1`` recovers strict v1.
 
-With ``cpt_state_corrector=True`` an optional predictor-corrector pass
+With ``cpt_state_corrector=True`` (the default) a predictor-corrector pass
 refines the chunk probabilities: pass one routes from the entry state, then a
 first-order per-position trajectory of ``(S, nu)`` built from the pass-one
 responsibilities (exclusive prefix sums, all parallel) yields corrected
 per-position prototypes for pass two.  The trajectory correction vanishes for
 single-token chunks, so ``cpt_state_chunk_size=1`` still recovers strict v1
-exactly.  The default keeps the frozen blockwise semantics.
+exactly.  Setting ``cpt_state_corrector=False`` restores the frozen blockwise
+semantics (every token routed from the chunk entry state).
 """
 
 from dataclasses import dataclass
@@ -31,7 +32,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import CPT_ROUTING_ARCHITECTURE_FIELDS, TinyMixtralConfig
-
 
 CPT_ROUTER_ALGORITHM_VERSION = 1
 
@@ -86,10 +86,7 @@ class CPTRouter(nn.Module):
 
         self.layer_index = layer_index
         self._cpt_config_snapshot = config.cpt_config_dict()
-        self._architecture_snapshot = {
-            field: getattr(config, field)
-            for field in CPT_ROUTING_ARCHITECTURE_FIELDS
-        }
+        self._architecture_snapshot = {field: getattr(config, field) for field in CPT_ROUTING_ARCHITECTURE_FIELDS}
         self.hidden_size = config.hidden_size
         self.projection_dim = config.cpt_projection_dim
         self.num_prototypes = config.cpt_num_prototypes
@@ -113,15 +110,9 @@ class CPTRouter(nn.Module):
         self.price_learning_rate = config.cpt_price_learning_rate
         self.init_seed = config.cpt_init_seed + 104_729 * layer_index
 
-        self.projection = nn.Parameter(
-            torch.empty(self.projection_dim, self.hidden_size, dtype=torch.float32)
-        )
-        self.anchors = nn.Parameter(
-            torch.empty(self.projection_dim, self.num_prototypes, dtype=torch.float32)
-        )
-        self.energy = nn.Parameter(
-            torch.empty(self.num_prototypes, self.num_experts, dtype=torch.float32)
-        )
+        self.projection = nn.Parameter(torch.empty(self.projection_dim, self.hidden_size, dtype=torch.float32))
+        self.anchors = nn.Parameter(torch.empty(self.projection_dim, self.num_prototypes, dtype=torch.float32))
+        self.energy = nn.Parameter(torch.empty(self.num_prototypes, self.num_experts, dtype=torch.float32))
         self.register_buffer(
             "congestion_price",
             torch.zeros(self.num_experts, dtype=torch.float32),
@@ -141,9 +132,7 @@ class CPTRouter(nn.Module):
         parameter_state = {
             name: (
                 parameter.detach().clone(),
-                None
-                if parameter.grad is None
-                else parameter.grad.detach().clone(),
+                None if parameter.grad is None else parameter.grad.detach().clone(),
             )
             for name, parameter in (
                 ("projection", self.projection),
@@ -187,12 +176,15 @@ class CPTRouter(nn.Module):
             q, _ = torch.linalg.qr(candidate, mode="reduced")
             projection = q.T.contiguous()
         else:
-            projection = torch.randn(
-                self.projection_dim,
-                self.hidden_size,
-                generator=generator,
-                dtype=torch.float32,
-            ) / self.hidden_size ** 0.5
+            projection = (
+                torch.randn(
+                    self.projection_dim,
+                    self.hidden_size,
+                    generator=generator,
+                    dtype=torch.float32,
+                )
+                / self.hidden_size**0.5
+            )
         self.projection.copy_(projection)
 
         if self.num_prototypes <= self.projection_dim:
@@ -217,17 +209,11 @@ class CPTRouter(nn.Module):
                     dim=0,
                     keepdim=True,
                 )
-                if (
-                    not bool(torch.isfinite(candidate_norms).all())
-                    or bool((candidate_norms <= 0).any())
-                ):
+                if not bool(torch.isfinite(candidate_norms).all()) or bool((candidate_norms <= 0).any()):
                     continue
                 candidate = anchor_candidate / candidate_norms
                 unique_directions = torch.unique(candidate.T, dim=0).shape[0]
-                if (
-                    bool(torch.isfinite(candidate).all())
-                    and unique_directions == self.num_prototypes
-                ):
+                if bool(torch.isfinite(candidate).all()) and unique_directions == self.num_prototypes:
                     anchors = candidate
                     break
             if anchors is None:
@@ -290,20 +276,14 @@ class CPTRouter(nn.Module):
         valid_rows = valid_chunk.any(dim=1, keepdim=True)
 
         beta = self.beta_max * nu_old / (nu_old + self.kappa_beta)
-        mixed = (
-            self.anchors.unsqueeze(0)
-            * (1.0 - beta.detach().unsqueeze(1))
-            + state_old.detach() * beta.detach().unsqueeze(1)
-        )
+        mixed = self.anchors.unsqueeze(0) * (1.0 - beta.detach().unsqueeze(1)) + state_old.detach() * beta.detach().unsqueeze(1)
         prototypes = self._stable_l2(mixed, dim=1, eps=self.eps_m)
         prototype_logits = torch.bmm(z_chunk, prototypes) / self.prototype_temperature
         q_chunk = F.softmax(prototype_logits, dim=-1, dtype=torch.float32)
         q_chunk = q_chunk * valid_chunk.unsqueeze(-1)
 
         if self.state_corrector:
-            q_chunk = self._correct_chunk(
-                z_chunk, valid_chunk, state_old, nu_old, rho, q_chunk
-            )
+            q_chunk = self._correct_chunk(z_chunk, valid_chunk, state_old, nu_old, rho, q_chunk)
 
         with torch.no_grad():
             q_detached = q_chunk.detach()
@@ -317,14 +297,10 @@ class CPTRouter(nn.Module):
             state_gradient = (
                 state_old * routing_mass.unsqueeze(1)
                 - weighted_projection
-                + self.lambda_sa
-                * valid_count.view(-1, 1, 1)
-                * (state_old - self.anchors.detach().unsqueeze(0))
+                + self.lambda_sa * valid_count.view(-1, 1, 1) * (state_old - self.anchors.detach().unsqueeze(0))
             )
             state_candidate = state_old - self.state_step_size * state_gradient
-            state_norm = torch.linalg.vector_norm(
-                state_candidate, dim=1, keepdim=True
-            )
+            state_norm = torch.linalg.vector_norm(state_candidate, dim=1, keepdim=True)
             state_candidate = state_candidate / torch.clamp_min(
                 state_norm / self.state_radius,
                 1.0,
@@ -334,16 +310,9 @@ class CPTRouter(nn.Module):
             )
             decay_weights = rho.pow(valid_after).unsqueeze(-1)
             retained_responsibility = rho.pow(valid_count).unsqueeze(-1)
-            nu_candidate = (
-                retained_responsibility * nu_old
-                + (q_detached * decay_weights).sum(dim=1)
-            )
-            next_state = torch.where(
-                valid_rows.unsqueeze(-1), state_candidate, state_old
-            )
-            next_responsibility = torch.where(
-                valid_rows, nu_candidate, nu_old
-            )
+            nu_candidate = retained_responsibility * nu_old + (q_detached * decay_weights).sum(dim=1)
+            next_state = torch.where(valid_rows.unsqueeze(-1), state_candidate, state_old)
+            next_responsibility = torch.where(valid_rows, nu_candidate, nu_old)
         return q_chunk, next_state, next_responsibility
 
     def _correct_chunk(
@@ -366,18 +335,12 @@ class CPTRouter(nn.Module):
         """
         with torch.no_grad():
             token_gradients = (
-                (state_old.unsqueeze(1) - z_chunk.unsqueeze(-1))
-                * q_chunk.unsqueeze(2)
-                + self.lambda_sa
-                * (state_old.unsqueeze(1) - self.anchors.detach().unsqueeze(0).unsqueeze(0))
+                (state_old.unsqueeze(1) - z_chunk.unsqueeze(-1)) * q_chunk.unsqueeze(2)
+                + self.lambda_sa * (state_old.unsqueeze(1) - self.anchors.detach().unsqueeze(0).unsqueeze(0))
             ) * valid_chunk.unsqueeze(-1).unsqueeze(-1)
             exclusive_gradients = token_gradients.cumsum(dim=1) - token_gradients
-            state_trajectory = (
-                state_old.unsqueeze(1) - self.state_step_size * exclusive_gradients
-            )
-            trajectory_norm = torch.linalg.vector_norm(
-                state_trajectory, dim=2, keepdim=True
-            )
+            state_trajectory = state_old.unsqueeze(1) - self.state_step_size * exclusive_gradients
+            trajectory_norm = torch.linalg.vector_norm(state_trajectory, dim=2, keepdim=True)
             state_trajectory = state_trajectory / torch.clamp_min(
                 trajectory_norm / self.state_radius,
                 1.0,
@@ -387,29 +350,15 @@ class CPTRouter(nn.Module):
             valid_before = valid_float.cumsum(dim=1) - valid_float
             inverse_decay = rho.pow(-(valid_before + 1.0)).unsqueeze(-1)
             weighted_probabilities = q_chunk.detach() * inverse_decay
-            exclusive_weighted = (
-                weighted_probabilities.cumsum(dim=1) - weighted_probabilities
-            )
-            responsibility_trajectory = rho.pow(valid_before).unsqueeze(-1) * (
-                nu_old.unsqueeze(1) + exclusive_weighted
-            )
-            beta_trajectory = (
-                self.beta_max
-                * responsibility_trajectory
-                / (responsibility_trajectory + self.kappa_beta)
-            )
+            exclusive_weighted = weighted_probabilities.cumsum(dim=1) - weighted_probabilities
+            responsibility_trajectory = rho.pow(valid_before).unsqueeze(-1) * (nu_old.unsqueeze(1) + exclusive_weighted)
+            beta_trajectory = self.beta_max * responsibility_trajectory / (responsibility_trajectory + self.kappa_beta)
 
-        corrected_mixed = (
-            self.anchors.unsqueeze(0).unsqueeze(0)
-            * (1.0 - beta_trajectory.detach().unsqueeze(2))
-            + state_trajectory.detach() * beta_trajectory.detach().unsqueeze(2)
-        )
-        corrected_prototypes = self._stable_l2(
-            corrected_mixed, dim=2, eps=self.eps_m
-        )
-        corrected_logits = torch.einsum(
-            "btd,btdk->btk", z_chunk, corrected_prototypes
-        ) / self.prototype_temperature
+        corrected_mixed = self.anchors.unsqueeze(0).unsqueeze(0) * (
+            1.0 - beta_trajectory.detach().unsqueeze(2)
+        ) + state_trajectory.detach() * beta_trajectory.detach().unsqueeze(2)
+        corrected_prototypes = self._stable_l2(corrected_mixed, dim=2, eps=self.eps_m)
+        corrected_logits = torch.einsum("btd,btdk->btk", z_chunk, corrected_prototypes) / self.prototype_temperature
         q_corrected = F.softmax(corrected_logits, dim=-1, dtype=torch.float32)
         return q_corrected * valid_chunk.unsqueeze(-1)
 
@@ -417,10 +366,7 @@ class CPTRouter(nn.Module):
         """Return B in R^{K x N}, row-normalized over experts."""
         # ``energy`` stores Theta_C. Right-centering implements C = Theta_C H_N.
         centered_energy = self.energy - self.energy.mean(dim=-1, keepdim=True)
-        logits = (
-            centered_energy
-            - self.congestion_price.detach().unsqueeze(0)
-        ) / self.expert_temperature
+        logits = (centered_energy - self.congestion_price.detach().unsqueeze(0)) / self.expert_temperature
         return F.softmax(logits, dim=-1, dtype=torch.float32)
 
     def forward(
@@ -440,20 +386,14 @@ class CPTRouter(nn.Module):
         CPU and eval paths stay eager for determinism and to avoid recompiling
         on variable lengths.
         """
-        if (
-            hidden_states.is_cuda
-            and self.training
-            and self._should_compile(hidden_states.shape[1])
-        ):
+        if hidden_states.is_cuda and self.training and self._should_compile(hidden_states.shape[1]):
             if self._compiled_forward_impl is None:
                 self._compiled_forward_impl = torch.compile(self._forward_impl)
             return self._compiled_forward_impl(hidden_states, attention_mask)
         return self._forward_impl(hidden_states, attention_mask)
 
     def _should_compile(self, sequence_length: int) -> bool:
-        num_chunks = (sequence_length + self.state_chunk_size - 1) // (
-            self.state_chunk_size
-        )
+        num_chunks = (sequence_length + self.state_chunk_size - 1) // (self.state_chunk_size)
         return num_chunks <= _MAX_COMPILED_CHUNKS
 
     def _forward_impl(
@@ -465,9 +405,7 @@ class CPTRouter(nn.Module):
             raise ValueError("hidden_states must have shape [batch, sequence, hidden]")
         batch_size, sequence_length, hidden_size = hidden_states.shape
         if hidden_size != self.hidden_size:
-            raise ValueError(
-                f"hidden size mismatch: expected {self.hidden_size}, got {hidden_size}"
-            )
+            raise ValueError(f"hidden size mismatch: expected {self.hidden_size}, got {hidden_size}")
         if sequence_length <= 0:
             raise ValueError("sequence length must be positive")
         if attention_mask is None:
@@ -481,10 +419,7 @@ class CPTRouter(nn.Module):
             if not isinstance(attention_mask, torch.Tensor):
                 raise TypeError("attention_mask must be a tensor")
             if tuple(attention_mask.shape) != (batch_size, sequence_length):
-                raise ValueError(
-                    "attention_mask must have shape "
-                    f"{(batch_size, sequence_length)}"
-                )
+                raise ValueError("attention_mask must have shape " f"{(batch_size, sequence_length)}")
             valid_mask = attention_mask.to(
                 device=hidden_states.device,
                 dtype=torch.bool,
@@ -631,9 +566,7 @@ class CPTRouter(nn.Module):
             current_optimizer_step,
             current_optimizer_step + 1,
         ):
-            raise RuntimeError(
-                "CPT optimizer_step must stay unchanged or advance by one"
-            )
+            raise RuntimeError("CPT optimizer_step must stay unchanged or advance by one")
         for name, parameter in (
             ("projection", self.projection),
             ("anchors", self.anchors),
@@ -645,9 +578,7 @@ class CPTRouter(nn.Module):
                 raise RuntimeError(f"CPT {name} is non-finite after optimizer.step")
 
         anchor_norms = torch.linalg.vector_norm(self.anchors, dim=0)
-        if not bool(torch.isfinite(anchor_norms).all()) or bool(
-            (anchor_norms <= 0).any()
-        ):
+        if not bool(torch.isfinite(anchor_norms).all()) or bool((anchor_norms <= 0).any()):
             raise RuntimeError("CPT anchor columns must be finite and non-zero")
         normalized_anchors = self.anchors / anchor_norms.unsqueeze(0)
 
@@ -658,8 +589,7 @@ class CPTRouter(nn.Module):
             expert_probability = proposal.load_sum / float(count)
             capacity = self.capacity_factor / self.num_experts
             next_price = torch.clamp_min(
-                self.congestion_price
-                + self.price_learning_rate * (expert_probability - capacity),
+                self.congestion_price + self.price_learning_rate * (expert_probability - capacity),
                 0.0,
             )
         if not bool(torch.isfinite(next_price).all()) or bool((next_price < 0).any()):
@@ -731,9 +661,7 @@ class CPTRouter(nn.Module):
             if not bool(torch.isfinite(value).all()):
                 raise RuntimeError(f"CPT {name} is non-finite")
         anchor_norms = torch.linalg.vector_norm(self.anchors, dim=0)
-        if bool((anchor_norms <= 0).any()) or not bool(
-            torch.isfinite(anchor_norms).all()
-        ):
+        if bool((anchor_norms <= 0).any()) or not bool(torch.isfinite(anchor_norms).all()):
             raise RuntimeError("CPT anchor columns must be finite and non-zero")
         if require_unit_anchors and not torch.allclose(
             anchor_norms,
@@ -770,18 +698,13 @@ class CPTRouter(nn.Module):
 
     def validate_config_binding(self, config: TinyMixtralConfig) -> None:
         """Reject saving a config that no longer describes this live Router."""
-        architecture = {
-            field: getattr(config, field)
-            for field in CPT_ROUTING_ARCHITECTURE_FIELDS
-        }
+        architecture = {field: getattr(config, field) for field in CPT_ROUTING_ARCHITECTURE_FIELDS}
         changed_architecture = sorted(
             field
             for field in self._architecture_snapshot.keys() | architecture.keys()
             if field not in self._architecture_snapshot
             or field not in architecture
-            or type(architecture[field]) is not type(
-                self._architecture_snapshot[field]
-            )
+            or type(architecture[field]) is not type(self._architecture_snapshot[field])
             or architecture[field] != self._architecture_snapshot[field]
         )
         if changed_architecture:
@@ -801,8 +724,7 @@ class CPTRouter(nn.Module):
         )
         if changed:
             raise RuntimeError(
-                f"CPT Router layer {self.layer_index} config changed after "
-                "construction: " + ", ".join(changed)
+                f"CPT Router layer {self.layer_index} config changed after " "construction: " + ", ".join(changed)
             )
 
     def trainable_parameters(self) -> tuple[nn.Parameter, nn.Parameter, nn.Parameter]:

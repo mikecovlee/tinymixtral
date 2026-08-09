@@ -18,20 +18,21 @@ class TinyMixtralConfig:
     hidden_size: int = 896
     num_hidden_layers: int = 10
     num_attention_heads: int = 16
-    num_key_value_heads: int = 4        # GQA 4:1 (was 14:2 = 7:1)
-    head_dim: int = 56                  # 16 × 56 = 896
+    num_key_value_heads: int = 4  # GQA 4:1 (was 14:2 = 7:1)
+    head_dim: int = 56  # 16 × 56 = 896
     max_position_embeddings: int = 2048
 
     # MoE 参数 (DeepSeek-style: shared + routed)
-    num_shared_experts: int = 1    # always-on
-    num_routed_experts: int = 6    # top-k selected
+    num_shared_experts: int = 1  # always-on
+    num_routed_experts: int = 6  # top-k selected
     num_experts_per_tok: int = 2
     expert_intermediate_size: int = 2389  # 8/3 × hidden_size
 
     @property
     def num_local_experts(self) -> int:
         return self.num_shared_experts + self.num_routed_experts
-    router_aux_loss_coef: float = 0.01    # 标准 Mixtral 值
+
+    router_aux_loss_coef: float = 0.01  # 标准 Mixtral 值
     router_jitter_noise: float = 0.01
 
     # 归一化 & 激活
@@ -51,10 +52,16 @@ class TinyMixtralConfig:
 
     def __post_init__(self):
         positive_fields = (
-            "vocab_size", "hidden_size", "num_hidden_layers",
-            "num_attention_heads", "num_key_value_heads", "head_dim",
-            "max_position_embeddings", "num_shared_experts",
-            "num_routed_experts", "num_experts_per_tok",
+            "vocab_size",
+            "hidden_size",
+            "num_hidden_layers",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "head_dim",
+            "max_position_embeddings",
+            "num_shared_experts",
+            "num_routed_experts",
+            "num_experts_per_tok",
             "expert_intermediate_size",
         )
         for name in positive_fields:
@@ -92,11 +99,14 @@ class TinyMixtralConfig:
     @classmethod
     def from_json_file(cls, path: str) -> "TinyMixtralConfig":
         import json
+
         with open(path) as f:
             return cls.from_dict(json.load(f))
 
     def save_pretrained(self, path: str):
-        import json, os
+        import json
+        import os
+
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/config.json", "w") as f:
             json.dump(self.to_dict(), f, indent=2)

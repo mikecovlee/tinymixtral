@@ -2,15 +2,22 @@
 # Open-source under the MIT License. See LICENSE for details.
 """train.py 和 resume.py 共享的训练逻辑。"""
 
-import math, sys, time, os, shutil, subprocess, json, signal
+import json
+import math
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import torch
 
-
 # ============================================================
 # 共享工具
 # ============================================================
+
 
 class BF16AdamW(torch.optim.AdamW):
     """AdamW that stores optimizer states in bfloat16 to save VRAM.
@@ -58,10 +65,10 @@ class BF16AdamW(torch.optim.AdamW):
                 exp_avg.lerp_(grad, 1 - beta1)
                 exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-                bias_correction1 = 1 - beta1 ** t
-                bias_correction2 = 1 - beta2 ** t
+                bias_correction1 = 1 - beta1**t
+                bias_correction2 = 1 - beta2**t
                 step_size = lr / bias_correction1
-                denom = (exp_avg_sq.sqrt() / (bias_correction2 ** 0.5)).add_(eps)
+                denom = (exp_avg_sq.sqrt() / (bias_correction2**0.5)).add_(eps)
 
                 if wd > 0:
                     p.mul_(1 - lr * wd)
@@ -95,12 +102,19 @@ def make_adamw(model, lr, weight_decay, betas=(0.9, 0.95), bf16_states=False):
         betas=betas,
     )
 
-def save_training_state(path, opt, sched, step, total_tok, warmup_steps, total_steps,
-                        fi=None, ptr=None, batch_size=None, seq_len=None):
+
+def save_training_state(
+    path, opt, sched, step, total_tok, warmup_steps, total_steps, fi=None, ptr=None, batch_size=None, seq_len=None
+):
     """保存 optimizer + scheduler + 数据位置状态到文件。"""
-    state = {"opt": opt.state_dict(), "sched": sched.state_dict(),
-             "step": step, "total_tok": total_tok,
-             "warmup_steps": warmup_steps, "total_steps": total_steps}
+    state = {
+        "opt": opt.state_dict(),
+        "sched": sched.state_dict(),
+        "step": step,
+        "total_tok": total_tok,
+        "warmup_steps": warmup_steps,
+        "total_steps": total_steps,
+    }
     if fi is not None:
         state["fi"] = fi
         state["ptr"] = ptr
@@ -110,9 +124,21 @@ def save_training_state(path, opt, sched, step, total_tok, warmup_steps, total_s
     torch.save(state, path)
 
 
-def save_checkpoint(model, opt, sched, output_dir, step, total_tok,
-                    warmup_steps, total_steps, fi, ptr,
-                    batch_size=None, seq_len=None, final=False):
+def save_checkpoint(
+    model,
+    opt,
+    sched,
+    output_dir,
+    step,
+    total_tok,
+    warmup_steps,
+    total_steps,
+    fi,
+    ptr,
+    batch_size=None,
+    seq_len=None,
+    final=False,
+):
     """完整写入临时目录后原子发布 checkpoint。"""
     suffix = "_final" if final else ""
     target = Path(output_dir) / f"step_{step:07d}{suffix}"
@@ -125,8 +151,17 @@ def save_checkpoint(model, opt, sched, output_dir, step, total_tok,
     try:
         torch.save(model.state_dict(), temp / "pytorch_model.bin")
         save_training_state(
-            temp / "training_state.pt", opt, sched, step, total_tok,
-            warmup_steps, total_steps, fi, ptr, batch_size, seq_len,
+            temp / "training_state.pt",
+            opt,
+            sched,
+            step,
+            total_tok,
+            warmup_steps,
+            total_steps,
+            fi,
+            ptr,
+            batch_size,
+            seq_len,
         )
         model.config.save_pretrained(str(temp))
         os.replace(temp, target)
@@ -138,10 +173,7 @@ def save_checkpoint(model, opt, sched, output_dir, step, total_tok,
 
 def prune_periodic_checkpoints(output_dir, keep_last):
     """仅保留最近的周期 checkpoint；final checkpoint 永不删除。"""
-    checkpoints = sorted(
-        path for path in Path(output_dir).glob("step_*")
-        if path.is_dir() and not path.name.endswith("_final")
-    )
+    checkpoints = sorted(path for path in Path(output_dir).glob("step_*") if path.is_dir() and not path.name.endswith("_final"))
     for path in checkpoints[:-keep_last]:
         shutil.rmtree(path)
 
@@ -154,18 +186,23 @@ def check_checkpoint_disk_space(model, output_dir, keep_last):
         probe_path = probe_path.parent
 
     parameter_bytes = sum(
-        parameter.numel() * parameter.element_size()
-        for parameter in model.parameters() if parameter.requires_grad
+        parameter.numel() * parameter.element_size() for parameter in model.parameters() if parameter.requires_grad
     )
     buffer_bytes = sum(buffer.numel() * buffer.element_size() for buffer in model.buffers())
     checkpoint_bytes = int((3 * parameter_bytes + buffer_bytes) * 1.15)
     checkpoint_bytes = max(checkpoint_bytes, 64 * 1024**2)
     target_bytes = checkpoint_bytes * (keep_last + 2)
-    existing_bytes = sum(
-        file.stat().st_size
-        for checkpoint in output_path.glob("step_*") if checkpoint.is_dir()
-        for file in checkpoint.rglob("*") if file.is_file()
-    ) if output_path.exists() else 0
+    existing_bytes = (
+        sum(
+            file.stat().st_size
+            for checkpoint in output_path.glob("step_*")
+            if checkpoint.is_dir()
+            for file in checkpoint.rglob("*")
+            if file.is_file()
+        )
+        if output_path.exists()
+        else 0
+    )
     additional_bytes = max(checkpoint_bytes, target_bytes - existing_bytes)
     free_bytes = shutil.disk_usage(probe_path).free
     if free_bytes < additional_bytes:
@@ -175,8 +212,7 @@ def check_checkpoint_disk_space(model, output_dir, keep_last):
             f"only {free_bytes / 1024**3:.1f} GiB free at {probe_path}"
         )
     print(
-        f"Checkpoint disk preflight: ~{checkpoint_bytes / 1024**3:.1f} GiB each, "
-        f"{free_bytes / 1024**3:.1f} GiB free",
+        f"Checkpoint disk preflight: ~{checkpoint_bytes / 1024**3:.1f} GiB each, " f"{free_bytes / 1024**3:.1f} GiB free",
         flush=True,
     )
 
@@ -196,6 +232,7 @@ def make_cosine_schedule(opt, warmup_steps, total_steps):
             progress = (s - warmup_steps + 1) / max(1, total_steps - warmup_steps)
         progress = min(max(progress, 0.0), 1.0)
         return 0.5 * (1.0 + math.cos(math.pi * progress))
+
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
@@ -224,12 +261,14 @@ def make_wsd_schedule(opt, warmup_steps, total_steps, decay_ratio=0.1):
         progress = (s - decay_start + 1) / max(1, total_steps - decay_start)
         progress = min(max(progress, 0.0), 1.0)
         return 1.0 - progress
+
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
 # ============================================================
 # CPU eval 子进程
 # ============================================================
+
 
 def run_cpu_eval(checkpoint_path, eval_dir):
     """子进程 CPU GLUE eval。"""
@@ -241,12 +280,30 @@ def run_cpu_eval(checkpoint_path, eval_dir):
     # 删除旧结果，防止子进程失败时误读
     if output.exists():
         output.unlink()
-    cmd = [sys.executable, str(script),
-           "--checkpoint", checkpoint_path, "--tokenizer", str(tokenizer_path),
-           "--tasks", "sst2,mrpc,qnli,rte,cola", "--limit", "200",
-           "--batch-size", "2", "--max-length", "256",
-           "--device", "cpu", "--precision", "fp32",
-           "--output", str(output), "--seed", "1234"]
+    cmd = [
+        sys.executable,
+        str(script),
+        "--checkpoint",
+        checkpoint_path,
+        "--tokenizer",
+        str(tokenizer_path),
+        "--tasks",
+        "sst2,mrpc,qnli,rte,cola",
+        "--limit",
+        "200",
+        "--batch-size",
+        "2",
+        "--max-length",
+        "256",
+        "--device",
+        "cpu",
+        "--precision",
+        "fp32",
+        "--output",
+        str(output),
+        "--seed",
+        "1234",
+    ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if r.returncode != 0:
@@ -254,17 +311,34 @@ def run_cpu_eval(checkpoint_path, eval_dir):
             print(f"  [eval err] exit={r.returncode} stderr={stderr_tail}", flush=True)
             return None, None  # 失败后不读旧结果
         if output.exists():
-            with open(output) as f: d = json.load(f)
+            with open(output) as f:
+                d = json.load(f)
             return d.get("aggregate", {}).get("mean_score"), d.get("results", {})
     except Exception as e:
         print(f"  [eval err] {e}", flush=True)
     return None, None
 
 
-def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
-                  output_dir, max_steps, save_every_min, log_every, step_start=0,
-                  schedule_args=None, eval_on_save=False,
-                  keep_last_checkpoints=5):
+def training_loop(
+    model,
+    opt,
+    sched,
+    files,
+    fi,
+    ptr,
+    total_tok,
+    bs,
+    seq,
+    chunk,
+    output_dir,
+    max_steps,
+    save_every_min,
+    log_every,
+    step_start=0,
+    schedule_args=None,
+    eval_on_save=False,
+    keep_last_checkpoints=5,
+):
     """按绝对 step 目标训练。
 
     schedule_args: 可选 dict with warmup_steps, total_steps，用于 checkpoint 恢复。
@@ -308,7 +382,7 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                 else:
                     raise RuntimeError(f"No shard contains at least {chunk} tokens")
 
-            batch = shard[ptr:ptr + chunk]
+            batch = shard[ptr : ptr + chunk]
             if batch.numel() != chunk:
                 print(f"  WARN: short read {batch.numel()}/{chunk} shard={fi}", flush=True)
                 ptr = 0
@@ -344,19 +418,31 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
             if step % log_every == 0:
                 elapsed = time.time() - t0
                 hours_elapsed = elapsed / 3600
-                print(f"  step {step:7d}: loss={out['loss'].item():.4f} "
-                      f"aux={out['aux_loss'].item():.1f} "
-                      f"tok/s={(total_tok - tok_base) / elapsed:.0f} "
-                      f"lr={sched.get_last_lr()[0]:.2e} "
-                      f"shard={fi}/{len(files)} "
-                      f"[{hours_elapsed:.1f}h]", flush=True)
+                print(
+                    f"  step {step:7d}: loss={out['loss'].item():.4f} "
+                    f"aux={out['aux_loss'].item():.1f} "
+                    f"tok/s={(total_tok - tok_base) / elapsed:.0f} "
+                    f"lr={sched.get_last_lr()[0]:.2e} "
+                    f"shard={fi}/{len(files)} "
+                    f"[{hours_elapsed:.1f}h]",
+                    flush=True,
+                )
 
             # ---- 保存 + eval ----
             if time.time() - last_save > save_every_min * 60:
                 d = save_checkpoint(
-                    model, opt, sched, output_dir, step, total_tok,
-                    sa.get("warmup_steps", 0), sa.get("total_steps", 0), fi, ptr,
-                    bs, seq,
+                    model,
+                    opt,
+                    sched,
+                    output_dir,
+                    step,
+                    total_tok,
+                    sa.get("warmup_steps", 0),
+                    sa.get("total_steps", 0),
+                    fi,
+                    ptr,
+                    bs,
+                    seq,
                 )
                 print(f"  -> Saved {d}", flush=True)
                 prune_periodic_checkpoints(output_dir, keep_last_checkpoints)
@@ -367,8 +453,10 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                     eval_dir = f"evals/{Path(output_dir).name}/step_{step:07d}"
                     mean, res = run_cpu_eval(d, eval_dir)
                     if mean is not None and res:
-                        parts = [f'{t}={r.get("accuracy", r.get("matthews_correlation", r.get("f1", float("nan")))):.3f}'
-                                 for t, r in sorted(res.items())]
+                        parts = [
+                            f'{t}={r.get("accuracy", r.get("matthews_correlation", r.get("f1", float("nan")))):.3f}'
+                            for t, r in sorted(res.items())
+                        ]
                         print(f"  [eval] mean={mean:.4f} | {' '.join(parts)}", flush=True)
 
             if stop_signal is not None:
@@ -376,9 +464,18 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                     print("  -> Current step was already checkpointed", flush=True)
                 else:
                     d = save_checkpoint(
-                        model, opt, sched, output_dir, step, total_tok,
-                        sa.get("warmup_steps", 0), sa.get("total_steps", 0), fi, ptr,
-                        bs, seq,
+                        model,
+                        opt,
+                        sched,
+                        output_dir,
+                        step,
+                        total_tok,
+                        sa.get("warmup_steps", 0),
+                        sa.get("total_steps", 0),
+                        fi,
+                        ptr,
+                        bs,
+                        seq,
                     )
                     print(f"  -> Emergency checkpoint saved: {d}", flush=True)
                     prune_periodic_checkpoints(output_dir, keep_last_checkpoints)
@@ -391,14 +488,22 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
     return step, total_tok, fi, ptr, elapsed
 
 
-def final_save(model, opt, sched, output_dir, step, total_tok, elapsed,
-               fi, ptr, batch_size, seq_len, schedule_args=None):
+def final_save(model, opt, sched, output_dir, step, total_tok, elapsed, fi, ptr, batch_size, seq_len, schedule_args=None):
     """保存最终 checkpoint。"""
     sa = schedule_args or {}
     d = save_checkpoint(
-        model, opt, sched, output_dir, step, total_tok,
-        sa.get("warmup_steps", 0), sa.get("total_steps", 0), fi, ptr,
-        batch_size, seq_len, final=True,
+        model,
+        opt,
+        sched,
+        output_dir,
+        step,
+        total_tok,
+        sa.get("warmup_steps", 0),
+        sa.get("total_steps", 0),
+        fi,
+        ptr,
+        batch_size,
+        seq_len,
+        final=True,
     )
-    print(f"\nDone: {step} steps {total_tok / 1e9:.3f}B tokens "
-          f"session={elapsed / 3600:.1f}h → {d}", flush=True)
+    print(f"\nDone: {step} steps {total_tok / 1e9:.3f}B tokens " f"session={elapsed / 3600:.1f}h → {d}", flush=True)

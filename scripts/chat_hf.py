@@ -9,7 +9,6 @@
 """
 
 import sys
-from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -59,7 +58,9 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, trust_remote_code=True, torch_dtype=torch.bfloat16,
+        model_path,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
     )
     model.eval()
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -70,7 +71,7 @@ def main():
     print(f"Model class: {type(model).__name__}")
     print(f"model_type: {model.config.model_type}")
 
-    print(f"\n交互模式 (temp=0.7, top_p=0.9, max_tokens=256)")
+    print("\n交互模式 (temp=0.7, top_p=0.9, max_tokens=256)")
     print("输入 'quit' 退出\n")
     try:
         while True:

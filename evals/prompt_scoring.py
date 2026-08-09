@@ -14,8 +14,8 @@
       这是为了避免 BOS token 导致 answer span 计算偏移。
 """
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -25,6 +25,7 @@ import torch.nn.functional as F
 @dataclass
 class ScoreResult:
     """单个样例的评分结果。"""
+
     label_scores: dict  # label_id -> normalized log-likelihood
     predicted_label: int
     metadata: Optional[dict] = None
@@ -50,8 +51,14 @@ def score_answers(
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"
         return _score_answers(
-            model, tokenizer, prompts, answer_choices, label_ids,
-            batch_size, max_length, device,
+            model,
+            tokenizer,
+            prompts,
+            answer_choices,
+            label_ids,
+            batch_size,
+            max_length,
+            device,
         )
     finally:
         tokenizer.padding_side = original_padding_side
@@ -118,7 +125,7 @@ def _score_answers(
                 batch_prompt_lens.append(0)
                 batch_answer_lens.append(0)
                 continue
-            kept_prompt = prompt_ids[-(max_length - len(answer_ids)):]
+            kept_prompt = prompt_ids[-(max_length - len(answer_ids)) :]
             batch_sequences.append(kept_prompt + answer_ids)
             batch_prompt_lens.append(len(kept_prompt))
             batch_answer_lens.append(len(answer_ids))
@@ -138,8 +145,7 @@ def _score_answers(
         autocast_dtype = model_dtype if use_autocast else torch.bfloat16
 
         with torch.inference_mode():
-            with torch.amp.autocast(device_type=str(device).split(":")[0],
-                                    dtype=autocast_dtype, enabled=use_autocast):
+            with torch.amp.autocast(device_type=str(device).split(":")[0], dtype=autocast_dtype, enabled=use_autocast):
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs["logits"].float()
 
@@ -174,16 +180,20 @@ def _score_answers(
     for i in range(N):
         if not scores[i] or not any(math.isfinite(score) for score in scores[i].values()):
             predicted = label_ids[i][0] if label_ids[i] else 0
-            results.append(ScoreResult(
-                label_scores={},
-                predicted_label=predicted,
-                metadata={"error": "no valid scores"},
-            ))
+            results.append(
+                ScoreResult(
+                    label_scores={},
+                    predicted_label=predicted,
+                    metadata={"error": "no valid scores"},
+                )
+            )
         else:
             best_label = max(scores[i], key=scores[i].get)
-            results.append(ScoreResult(
-                label_scores=scores[i],
-                predicted_label=best_label,
-            ))
+            results.append(
+                ScoreResult(
+                    label_scores=scores[i],
+                    predicted_label=best_label,
+                )
+            )
 
     return results

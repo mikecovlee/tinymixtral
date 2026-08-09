@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
+from model.config import TinyMixtralConfig  # noqa: E402
 
 
 def train_sentencepiece(train_files, output_dir, vocab_size=32000, model_prefix="tokenizer"):
@@ -68,9 +68,7 @@ def from_huggingface(model_id, output_dir, expected_vocab_size):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     if len(tokenizer) != expected_vocab_size:
-        raise ValueError(
-            f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}"
-        )
+        raise ValueError(f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}")
 
     os.makedirs(output_dir, exist_ok=True)
     tokenizer.save_pretrained(output_dir)
@@ -96,9 +94,7 @@ def main():
         tokenizer_object = train_sentencepiece(args.train_files, args.output, expected_vocab_size)
         tokenizer = save_hf_tokenizer(tokenizer_object, args.output)
         if len(tokenizer) != expected_vocab_size:
-            raise ValueError(
-                f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}"
-            )
+            raise ValueError(f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}")
 
 
 if __name__ == "__main__":

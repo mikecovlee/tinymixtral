@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Optional
 
-
 CPT_ROUTING_ARCHITECTURE_FIELDS = (
     "hidden_size",
     "num_hidden_layers",
@@ -52,7 +51,7 @@ class TinyMixtralConfig:
     num_local_experts: int = 6
     num_experts_per_tok: int = 2
     expert_intermediate_size: int = 2389  # 8/3 × hidden_size
-    router_aux_loss_coef: float = 0.01    # 标准 Mixtral 值
+    router_aux_loss_coef: float = 0.01  # 标准 Mixtral 值
     router_jitter_noise: float = 0.01
 
     # CPT-MoE probability Router (strict v1: P x -> stable L2)
@@ -99,10 +98,16 @@ class TinyMixtralConfig:
                 raise ValueError(f"{name} must be a positive integer")
 
         positive_fields = (
-            "vocab_size", "hidden_size", "num_hidden_layers",
-            "num_attention_heads", "num_key_value_heads", "head_dim",
-            "max_position_embeddings", "num_local_experts",
-            "num_experts_per_tok", "expert_intermediate_size",
+            "vocab_size",
+            "hidden_size",
+            "num_hidden_layers",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "head_dim",
+            "max_position_embeddings",
+            "num_local_experts",
+            "num_experts_per_tok",
+            "expert_intermediate_size",
         )
         for name in positive_fields:
             if getattr(self, name) <= 0:
@@ -115,14 +120,10 @@ class TinyMixtralConfig:
         ):
             raise ValueError("only cpt_router_version=1 is supported")
         if self.num_local_experts < 2:
-            raise ValueError(
-                "num_local_experts must be an integer of at least 2 for CPT"
-            )
+            raise ValueError("num_local_experts must be an integer of at least 2 for CPT")
         if self.cpt_num_prototypes is None:
             self.cpt_num_prototypes = 2 * self.num_local_experts
-        if isinstance(self.cpt_num_prototypes, bool) or not isinstance(
-            self.cpt_num_prototypes, int
-        ):
+        if isinstance(self.cpt_num_prototypes, bool) or not isinstance(self.cpt_num_prototypes, int):
             raise ValueError("cpt_num_prototypes must be an integer")
         if self.cpt_num_prototypes != 2 * self.num_local_experts:
             raise ValueError("cpt_num_prototypes must equal 2 * num_local_experts")
@@ -135,15 +136,8 @@ class TinyMixtralConfig:
         ):
             raise ValueError("cpt_projection_dim must be a positive integer")
         if self.cpt_projection_dim == 1 and self.cpt_num_prototypes > 2:
-            raise ValueError(
-                "cpt_projection_dim=1 cannot initialize more than two distinct "
-                "unit anchors"
-            )
-        if (
-            isinstance(self.cpt_init_seed, bool)
-            or not isinstance(self.cpt_init_seed, int)
-            or self.cpt_init_seed < 0
-        ):
+            raise ValueError("cpt_projection_dim=1 cannot initialize more than two distinct " "unit anchors")
+        if isinstance(self.cpt_init_seed, bool) or not isinstance(self.cpt_init_seed, int) or self.cpt_init_seed < 0:
             raise ValueError("cpt_init_seed must be a non-negative integer")
         if (
             isinstance(self.cpt_state_chunk_size, bool)
@@ -153,9 +147,7 @@ class TinyMixtralConfig:
             raise ValueError("cpt_state_chunk_size must be a positive integer")
         if not isinstance(self.cpt_state_corrector, bool):
             raise ValueError("cpt_state_corrector must be a boolean")
-        max_layer_seed = self.cpt_init_seed + 104_729 * (
-            self.num_hidden_layers - 1
-        )
+        max_layer_seed = self.cpt_init_seed + 104_729 * (self.num_hidden_layers - 1)
         if max_layer_seed > (1 << 64) - 1:
             raise ValueError("cpt_init_seed and layer offsets must fit uint64")
 
@@ -177,9 +169,7 @@ class TinyMixtralConfig:
             raise ValueError("cpt_state_radius must be positive")
         beta_limit = 1.0 / (1.0 + self.cpt_state_radius)
         if not 0.0 < self.cpt_beta_max < beta_limit:
-            raise ValueError(
-                "cpt_beta_max must be in (0, 1 / (1 + cpt_state_radius))"
-            )
+            raise ValueError("cpt_beta_max must be in (0, 1 / (1 + cpt_state_radius))")
         if self.cpt_expert_temperature <= 0.0:
             raise ValueError("cpt_expert_temperature must be positive")
         for name in ("cpt_eps_z", "cpt_eps_m", "cpt_eps_init"):
@@ -188,13 +178,11 @@ class TinyMixtralConfig:
         if self.cpt_capacity_factor < 1.0:
             raise ValueError("cpt_capacity_factor must be at least 1")
 
-        default_kappa_beta = 1.0 / (
-            self.cpt_num_prototypes * (1.0 - self.cpt_rho_beta)
-        )
+        default_kappa_beta = 1.0 / (self.cpt_num_prototypes * (1.0 - self.cpt_rho_beta))
         independent_defaults = {
             "cpt_kappa_beta": default_kappa_beta,
             "cpt_lambda_sa": 1.0 / self.cpt_num_prototypes,
-            "cpt_prototype_temperature": self.cpt_projection_dim ** -0.5,
+            "cpt_prototype_temperature": self.cpt_projection_dim**-0.5,
             "cpt_energy_init_scale": 0.05 * self.cpt_expert_temperature,
             "cpt_price_learning_rate": 1e-2 * self.cpt_expert_temperature,
         }
@@ -210,20 +198,14 @@ class TinyMixtralConfig:
             raise ValueError("cpt_prototype_temperature must be positive")
 
         default_state_step_size = 0.1 / (1.0 + self.cpt_lambda_sa)
-        state_step_size = (
-            default_state_step_size
-            if self.cpt_state_step_size is None
-            else self.cpt_state_step_size
-        )
+        state_step_size = default_state_step_size if self.cpt_state_step_size is None else self.cpt_state_step_size
         self.cpt_state_step_size = _cpt_fp32(
             "cpt_state_step_size",
             state_step_size,
         )
         max_state_step = 1.0 / (2.0 * (1.0 + self.cpt_lambda_sa))
         if not 0.0 < self.cpt_state_step_size <= max_state_step:
-            raise ValueError(
-                "cpt_state_step_size must be in (0, 1 / (2 * (1 + cpt_lambda_sa))]"
-            )
+            raise ValueError("cpt_state_step_size must be in (0, 1 / (2 * (1 + cpt_lambda_sa))]")
         if self.cpt_energy_init_scale <= 0.0:
             raise ValueError("cpt_energy_init_scale must be positive")
         if self.cpt_price_learning_rate <= 0.0:
@@ -250,20 +232,19 @@ class TinyMixtralConfig:
 
     def cpt_config_dict(self) -> dict:
         """Return only the fields that define CPT Router behavior."""
-        return {
-            key: getattr(self, key)
-            for key in self.__class__.__dataclass_fields__
-            if key.startswith("cpt_")
-        }
+        return {key: getattr(self, key) for key in self.__class__.__dataclass_fields__ if key.startswith("cpt_")}
 
     @classmethod
     def from_json_file(cls, path: str) -> "TinyMixtralConfig":
         import json
+
         with open(path) as f:
             return cls.from_dict(json.load(f))
 
     def save_pretrained(self, path: str):
-        import json, os
+        import json
+        import os
+
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/config.json", "w") as f:
             json.dump(self.to_dict(), f, indent=2)

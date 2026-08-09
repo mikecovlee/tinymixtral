@@ -31,18 +31,18 @@ import torch
 # 添加项目根目录到 path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from evals.glue_tasks import (
+from evals.glue_tasks import (  # noqa: E402
     GLUE_TASKS,
     GLUE_TEMPLATES,
     QUICK_TASKS,
     SKIP_TASKS,
-    get_task,
-    load_glue_dataset,
     format_prompt,
+    get_task,
     get_verbalizer_labels,
+    load_glue_dataset,
 )
-from evals.prompt_scoring import score_answers
-from evals.metrics import accuracy_score, f1_score, matthews_corrcoef
+from evals.metrics import accuracy_score, f1_score, matthews_corrcoef  # noqa: E402
+from evals.prompt_scoring import score_answers  # noqa: E402
 
 METRIC_FUNCS = {
     "accuracy": lambda yt, yp: accuracy_score(yt, yp),
@@ -60,8 +60,7 @@ def parse_args():
     p.add_argument("--trust-remote-code", action="store_true", help="允许 HF remote code")
 
     # 任务
-    p.add_argument("--tasks", type=str, default="quick",
-                   help='逗号分隔任务名、"all" 或 "quick"')
+    p.add_argument("--tasks", type=str, default="quick", help='逗号分隔任务名、"all" 或 "quick"')
     p.add_argument("--split", type=str, default="validation", help="数据集 split")
 
     # 数据限制
@@ -70,8 +69,7 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=8, help="批大小")
 
     # 推理
-    p.add_argument("--precision", type=str, default="bf16",
-                   choices=["fp16", "bf16", "fp32"], help="推理精度")
+    p.add_argument("--precision", type=str, default="bf16", choices=["fp16", "bf16", "fp32"], help="推理精度")
     p.add_argument("--device", type=str, default=None, help="设备")
     p.add_argument("--seed", type=int, default=1234, help="随机种子")
     # 输出
@@ -110,9 +108,7 @@ def load_model_and_tokenizer(args):
     from transformers import AutoTokenizer
 
     tokenizer_path = args.tokenizer or args.checkpoint
-    tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path, trust_remote_code=args.trust_remote_code, legacy=False
-    )
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=args.trust_remote_code, legacy=False)
 
     # 设置 tokenizer
     if tokenizer.pad_token is None:
@@ -136,12 +132,14 @@ def load_model_and_tokenizer(args):
 
     if is_custom:
         from model import TinyMixtralForCausalLM
+
         model = TinyMixtralForCausalLM.from_pretrained(str(checkpoint_path))
         model = model.to(dtype=precision_dtype)
         print(f"Loaded TinyMixtral model from {args.checkpoint} (dtype={args.precision})")
     elif checkpoint_path.is_dir() and (checkpoint_path / "config.json").exists():
         # 标准 HuggingFace 格式
         from transformers import AutoModelForCausalLM
+
         model = AutoModelForCausalLM.from_pretrained(
             args.checkpoint,
             trust_remote_code=args.trust_remote_code,
@@ -150,20 +148,16 @@ def load_model_and_tokenizer(args):
         print(f"Loaded HF model from {args.checkpoint}")
     elif checkpoint_path.is_dir() and (checkpoint_path / "pytorch_model.bin").exists():
         from model import TinyMixtralForCausalLM
+
         model = TinyMixtralForCausalLM.from_pretrained(str(checkpoint_path))
         model = model.to(dtype=precision_dtype)
         print(f"Loaded TinyMixtral model from {args.checkpoint} (dtype={args.precision})")
     else:
-        raise FileNotFoundError(
-            f"Cannot load model from {args.checkpoint}. "
-            f"Expected HF config.json or pytorch_model.bin."
-        )
+        raise FileNotFoundError(f"Cannot load model from {args.checkpoint}. " f"Expected HF config.json or pytorch_model.bin.")
 
     model_vocab_size = getattr(model.config, "vocab_size", None)
     if model_vocab_size is not None and len(tokenizer) != model_vocab_size:
-        raise ValueError(
-            f"Tokenizer vocab size is {len(tokenizer)}, model expects {model_vocab_size}"
-        )
+        raise ValueError(f"Tokenizer vocab size is {len(tokenizer)}, model expects {model_vocab_size}")
 
     return model, tokenizer
 
@@ -199,7 +193,8 @@ def evaluate_task(model, tokenizer, task_name, template, verbalizer, args):
     # 评分
     t0 = time.time()
     score_results = score_answers(
-        model, tokenizer,
+        model,
+        tokenizer,
         prompts=prompts,
         answer_choices=answer_choices,
         label_ids=label_id_lists,
@@ -250,7 +245,7 @@ def main():
     for task_name in tasks:
         print(f"\n[{task_name}]")
         if task_name not in templates:
-            print(f"  Skipping: no template")
+            print("  Skipping: no template")
             continue
 
         tpl = templates[task_name]
@@ -291,14 +286,16 @@ def main():
         # 保存预测
         if args.save_predictions:
             for i in range(len(y_true)):
-                all_predictions.append({
-                    "task": task_name,
-                    "example_id": i,
-                    "gold_label": y_true[i],
-                    "predicted_label": y_pred[i],
-                    "label_scores": score_results[i].label_scores,
-                    "correct": y_true[i] == y_pred[i],
-                })
+                all_predictions.append(
+                    {
+                        "task": task_name,
+                        "example_id": i,
+                        "gold_label": y_true[i],
+                        "predicted_label": y_pred[i],
+                        "label_scores": score_results[i].label_scores,
+                        "correct": y_true[i] == y_pred[i],
+                    }
+                )
 
     total_time = time.time() - total_start
 

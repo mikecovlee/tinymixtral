@@ -12,10 +12,10 @@ from transformers import PreTrainedModel
 
 from .configuration_tinymixtral import TinyMixtralConfig
 
-
 # ============================================================
 # Layers
 # ============================================================
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -88,13 +88,19 @@ class GQAAttention(nn.Module):
             causal = torch.tril(torch.ones(S, S, device=hidden_states.device, dtype=torch.bool))
             combined = causal[None, None, :, :] & attention_mask[:, None, None, :]
             attn = F.scaled_dot_product_attention(
-                q, k_exp, v_exp, attn_mask=combined,
+                q,
+                k_exp,
+                v_exp,
+                attn_mask=combined,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
             )
         else:
             attn = F.scaled_dot_product_attention(
-                q, k, v, attn_mask=None,
+                q,
+                k,
+                v,
+                attn_mask=None,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=True,
                 enable_gqa=True,
@@ -186,6 +192,7 @@ class MoETransformerBlock(nn.Module):
 # ============================================================
 # Causal LM
 # ============================================================
+
 
 @dataclass
 class CausalLMOutputWithPast:

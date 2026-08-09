@@ -2,15 +2,23 @@
 # Open-source under the MIT License. See LICENSE for details.
 """train.py 和 resume.py 共享的训练逻辑。"""
 
-import copy, math, sys, time, os, shutil, subprocess, json, signal
+import copy
+import json
+import math
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import torch
 
-
 # ============================================================
 # 共享工具
 # ============================================================
+
 
 class BF16AdamW(torch.optim.AdamW):
     """AdamW that stores optimizer states in bfloat16 to save VRAM.
@@ -41,11 +49,7 @@ class BF16AdamW(torch.optim.AdamW):
                     serialized_groups,
                 ):
                     live_parameters = live_group.get("params")
-                    serialized_ids = (
-                        serialized_group.get("params")
-                        if isinstance(serialized_group, dict)
-                        else None
-                    )
+                    serialized_ids = serialized_group.get("params") if isinstance(serialized_group, dict) else None
                     if (
                         not isinstance(live_parameters, list)
                         or not isinstance(serialized_ids, list)
@@ -61,9 +65,7 @@ class BF16AdamW(torch.optim.AdamW):
                             continue
                         serialized_step = serialized_entry.get("step")
                         if type(serialized_step) is int:
-                            exact_steps[parameter] = _optimizer_step_value(
-                                serialized_step
-                            )
+                            exact_steps[parameter] = _optimizer_step_value(serialized_step)
         result = super().load_state_dict(state_dict)
         for parameter, state in self.state.items():
             if not state:
@@ -114,10 +116,10 @@ class BF16AdamW(torch.optim.AdamW):
                 exp_avg.lerp_(grad, 1 - beta1)
                 exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-                bias_correction1 = 1 - beta1 ** t
-                bias_correction2 = 1 - beta2 ** t
+                bias_correction1 = 1 - beta1**t
+                bias_correction2 = 1 - beta2**t
                 step_size = lr / bias_correction1
-                denom = (exp_avg_sq.sqrt() / (bias_correction2 ** 0.5)).add_(eps)
+                denom = (exp_avg_sq.sqrt() / (bias_correction2**0.5)).add_(eps)
 
                 if wd > 0:
                     p.mul_(1 - lr * wd)
@@ -179,27 +181,16 @@ _MAX_EXACT_FP32_INTEGER = 1 << 24
 
 def _validate_adamw_group_float(name, value, expected_value) -> None:
     if type(expected_value) is not float:
-        raise RuntimeError(
-            "live AdamW parameter group uses an unsupported "
-            f"{name} scalar type"
-        )
+        raise RuntimeError("live AdamW parameter group uses an unsupported " f"{name} scalar type")
     if type(value) is not float:
-        raise RuntimeError(
-            "serialized optimizer parameter group has an invalid "
-            f"{name} type"
-        )
+        raise RuntimeError("serialized optimizer parameter group has an invalid " f"{name} type")
     if not math.isfinite(value) or value < 0.0:
-        raise RuntimeError(
-            "serialized optimizer parameter group "
-            f"{name} must be a finite non-negative float"
-        )
+        raise RuntimeError("serialized optimizer parameter group " f"{name} must be a finite non-negative float")
 
 
 def _normalize_cpt_optimizer_state_dtype(value: str) -> str:
     if not isinstance(value, str) or value not in _CPT_OPTIMIZER_STATE_DTYPES:
-        raise RuntimeError(
-            "cpt_optimizer_state_dtype must be 'float32' or 'bfloat16'"
-        )
+        raise RuntimeError("cpt_optimizer_state_dtype must be 'float32' or 'bfloat16'")
     return value
 
 
@@ -210,9 +201,7 @@ def get_cpt_optimizer_state_dtype(optimizer) -> str:
         return "bfloat16"
     if optimizer_type is torch.optim.AdamW:
         return "float32"
-    raise TypeError(
-        "CPT checkpointing supports torch.optim.AdamW and BF16AdamW only"
-    )
+    raise TypeError("CPT checkpointing supports torch.optim.AdamW and BF16AdamW only")
 
 
 def validate_cpt_optimizer_state_dtype(optimizer, expected: str) -> str:
@@ -239,10 +228,7 @@ def _unwrap_cpt_model(model):
 
 def _assert_not_poisoned(*objects) -> None:
     if any(bool(getattr(obj, "_tinymixtral_fail_stop", False)) for obj in objects):
-        raise RuntimeError(
-            "training state is fail-stop poisoned; restore the last "
-            "successful checkpoint"
-        )
+        raise RuntimeError("training state is fail-stop poisoned; restore the last " "successful checkpoint")
 
 
 def _mark_fail_stop(*objects) -> None:
@@ -253,9 +239,7 @@ def _mark_fail_stop(*objects) -> None:
         except BaseException as error:
             errors.append(error)
     if errors:
-        raise RuntimeError(
-            "failed to mark every training object as fail-stop"
-        ) from errors[0]
+        raise RuntimeError("failed to mark every training object as fail-stop") from errors[0]
 
 
 def _assert_cpt_optimizer_binding(model, optimizer):
@@ -270,19 +254,14 @@ def _assert_cpt_optimizer_binding(model, optimizer):
     for parameter in required:
         count = counts.get(id(parameter), 0)
         if count != 1:
-            raise RuntimeError(
-                "optimizer must contain every CPT learnable parameter exactly once"
-            )
+            raise RuntimeError("optimizer must contain every CPT learnable parameter exactly once")
     return required
 
 
 def _named_cpt_optimizer_parameters(model, optimizer):
     cpt_model = _unwrap_cpt_model(model)
     parameters = _assert_cpt_optimizer_binding(model, optimizer)
-    names_by_identity = {
-        id(parameter): name
-        for name, parameter in cpt_model.named_parameters()
-    }
+    names_by_identity = {id(parameter): name for name, parameter in cpt_model.named_parameters()}
     named_parameters = []
     for parameter in parameters:
         name = names_by_identity.get(id(parameter))
@@ -293,81 +272,51 @@ def _named_cpt_optimizer_parameters(model, optimizer):
 
 
 def _normalize_cpt_optimizer_state_presence(value, known_names):
-    if not isinstance(value, (list, tuple)) or any(
-        not isinstance(name, str) for name in value
-    ):
-        raise RuntimeError(
-            "cpt_optimizer_state_presence must be a sequence of parameter names"
-        )
+    if not isinstance(value, (list, tuple)) or any(not isinstance(name, str) for name in value):
+        raise RuntimeError("cpt_optimizer_state_presence must be a sequence of parameter names")
     presence = tuple(value)
     if len(set(presence)) != len(presence):
         raise RuntimeError("cpt_optimizer_state_presence contains duplicates")
     known = tuple(known_names)
     present = set(presence)
     if not present.issubset(known):
-        raise RuntimeError(
-            "cpt_optimizer_state_presence contains unknown parameter names"
-        )
+        raise RuntimeError("cpt_optimizer_state_presence contains unknown parameter names")
     canonical = tuple(name for name in known if name in present)
     if presence != canonical:
-        raise RuntimeError(
-            "cpt_optimizer_state_presence is not in canonical parameter order"
-        )
+        raise RuntimeError("cpt_optimizer_state_presence is not in canonical parameter order")
     if presence not in ((), known):
-        raise RuntimeError(
-            "cpt_optimizer_state_presence must be empty or contain every "
-            "CPT learnable parameter"
-        )
+        raise RuntimeError("cpt_optimizer_state_presence must be empty or contain every " "CPT learnable parameter")
     return presence
 
 
 def _normalize_cpt_optimizer_parameter_bindings(value, known_names):
     if not isinstance(value, (list, tuple)):
-        raise RuntimeError(
-            "cpt_optimizer_parameter_bindings must be an ordered sequence"
-        )
+        raise RuntimeError("cpt_optimizer_parameter_bindings must be an ordered sequence")
     bindings = []
     for item in value:
         if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise RuntimeError(
-                "cpt_optimizer_parameter_bindings contains a malformed binding"
-            )
+            raise RuntimeError("cpt_optimizer_parameter_bindings contains a malformed binding")
         name, serialized_id = item
         if not isinstance(name, str):
-            raise RuntimeError(
-                "cpt_optimizer_parameter_bindings contains an invalid name"
-            )
-        if (
-            isinstance(serialized_id, bool)
-            or not isinstance(serialized_id, int)
-            or serialized_id < 0
-        ):
-            raise RuntimeError(
-                "cpt_optimizer_parameter_bindings contains an invalid parameter id"
-            )
+            raise RuntimeError("cpt_optimizer_parameter_bindings contains an invalid name")
+        if isinstance(serialized_id, bool) or not isinstance(serialized_id, int) or serialized_id < 0:
+            raise RuntimeError("cpt_optimizer_parameter_bindings contains an invalid parameter id")
         bindings.append((name, serialized_id))
 
     bindings = tuple(bindings)
     known = tuple(known_names)
     if tuple(name for name, _ in bindings) != known:
-        raise RuntimeError(
-            "cpt_optimizer_parameter_bindings must bind every CPT parameter "
-            "in canonical name order"
-        )
+        raise RuntimeError("cpt_optimizer_parameter_bindings must bind every CPT parameter " "in canonical name order")
     serialized_ids = tuple(serialized_id for _, serialized_id in bindings)
     if len(set(serialized_ids)) != len(serialized_ids):
-        raise RuntimeError(
-            "cpt_optimizer_parameter_bindings contains duplicate parameter ids"
-        )
+        raise RuntimeError("cpt_optimizer_parameter_bindings contains duplicate parameter ids")
     return bindings
 
 
 def _optimizer_step_value(value) -> int:
     if type(value) is int:
         if value < 0:
-            raise RuntimeError(
-                "CPT optimizer step must be a non-negative integer"
-            )
+            raise RuntimeError("CPT optimizer step must be a non-negative integer")
         return value
     if isinstance(value, torch.Tensor):
         if value.is_meta:
@@ -378,18 +327,10 @@ def _optimizer_step_value(value) -> int:
             raise RuntimeError("CPT optimizer step must be detached")
         scalar = value.item()
         if isinstance(scalar, bool) or not isinstance(scalar, (int, float)):
-            raise RuntimeError(
-                "CPT optimizer step must be a non-negative integer"
-            )
+            raise RuntimeError("CPT optimizer step must be a non-negative integer")
         numeric = float(scalar)
-        if (
-            not math.isfinite(numeric)
-            or numeric < 0.0
-            or not numeric.is_integer()
-        ):
-            raise RuntimeError(
-                "CPT optimizer step must be a non-negative integer"
-            )
+        if not math.isfinite(numeric) or numeric < 0.0 or not numeric.is_integer():
+            raise RuntimeError("CPT optimizer step must be a non-negative integer")
         return int(numeric)
     raise RuntimeError("CPT optimizer step must be a non-negative integer")
 
@@ -397,18 +338,12 @@ def _optimizer_step_value(value) -> int:
 def _validate_cpt_optimizer_step(value, optimizer_type) -> int:
     if optimizer_type is BF16AdamW:
         if type(value) is not int:
-            raise RuntimeError(
-                "BF16AdamW CPT optimizer step must be a Python integer"
-            )
+            raise RuntimeError("BF16AdamW CPT optimizer step must be a Python integer")
     elif optimizer_type is torch.optim.AdamW:
         if not isinstance(value, torch.Tensor) or value.dtype != torch.float32:
-            raise RuntimeError(
-                "AdamW CPT optimizer step must be an FP32 scalar tensor"
-            )
+            raise RuntimeError("AdamW CPT optimizer step must be an FP32 scalar tensor")
     else:
-        raise TypeError(
-            "CPT checkpointing supports torch.optim.AdamW and BF16AdamW only"
-        )
+        raise TypeError("CPT checkpointing supports torch.optim.AdamW and BF16AdamW only")
     return _optimizer_step_value(value)
 
 
@@ -459,29 +394,19 @@ def _validate_cpt_optimizer_steps(
 ) -> int:
     if not presence:
         if steps:
-            raise RuntimeError(
-                "CPT optimizer steps exist without initialized CPT state"
-            )
+            raise RuntimeError("CPT optimizer steps exist without initialized CPT state")
         if expected_optimizer_step != 0:
-            raise RuntimeError(
-                "CPT optimizer state is missing after initialization"
-            )
+            raise RuntimeError("CPT optimizer state is missing after initialization")
         return 0
     if len(steps) != len(presence) or len(set(steps)) != 1:
         raise RuntimeError("CPT optimizer steps disagree across parameters")
     step = steps[0]
     if step < 1:
-        raise RuntimeError(
-            "initialized CPT optimizer state must have step at least one"
-        )
+        raise RuntimeError("initialized CPT optimizer state must have step at least one")
     if step > state_version:
-        raise RuntimeError(
-            "CPT optimizer step exceeds the model CPT state version"
-        )
+        raise RuntimeError("CPT optimizer step exceeds the model CPT state version")
     if step != expected_optimizer_step:
-        raise RuntimeError(
-            "CPT optimizer step disagrees with the model checkpoint"
-        )
+        raise RuntimeError("CPT optimizer step disagrees with the model checkpoint")
     return step
 
 
@@ -504,11 +429,7 @@ def _validate_live_cpt_optimizer_state(
         )
     named_parameters = _named_cpt_optimizer_parameters(model, optimizer)
     known_names = tuple(name for name, _ in named_parameters)
-    actual_presence = tuple(
-        name
-        for name, parameter in named_parameters
-        if parameter in optimizer.state
-    )
+    actual_presence = tuple(name for name, parameter in named_parameters if parameter in optimizer.state)
     actual_presence = _normalize_cpt_optimizer_state_presence(
         actual_presence,
         known_names,
@@ -519,9 +440,7 @@ def _validate_live_cpt_optimizer_state(
             known_names,
         )
         if actual_presence != normalized_presence:
-            raise RuntimeError(
-                "CPT optimizer state presence disagrees with checkpoint manifest"
-            )
+            raise RuntimeError("CPT optimizer state presence disagrees with checkpoint manifest")
     expected_dtype = _CPT_OPTIMIZER_STATE_DTYPES[state_dtype]
     optimizer_type = type(optimizer)
     steps = []
@@ -580,34 +499,19 @@ def _preflight_cpt_optimizer_step(model, optimizer, transaction) -> int:
         _validate_live_cpt_optimizer_state(model, optimizer)
     else:
         if any(parameter in optimizer.state for parameter in parameters):
-            raise TypeError(
-                "CPT transactional step validation supports AdamW only"
-            )
+            raise TypeError("CPT transactional step validation supports AdamW only")
         if cpt_model.get_cpt_optimizer_step() != 0:
-            raise TypeError(
-                "an unsupported optimizer cannot resume initialized CPT state"
-            )
+            raise TypeError("an unsupported optimizer cannot resume initialized CPT state")
 
-    gradient_presence = tuple(
-        parameter.grad is not None for parameter in parameters
-    )
+    gradient_presence = tuple(parameter.grad is not None for parameter in parameters)
     if any(gradient_presence) and not all(gradient_presence):
-        raise RuntimeError(
-            "CPT gradients must be present for every learnable Router "
-            "parameter or for none of them"
-        )
+        raise RuntimeError("CPT gradients must be present for every learnable Router " "parameter or for none of them")
     has_gradients = bool(gradient_presence and gradient_presence[0])
     token_count = int(transaction.proposals[0].token_count.item())
     if token_count > 0 and not has_gradients:
-        raise RuntimeError(
-            "a CPT transaction with valid tokens requires gradients from "
-            "a successful backward pass"
-        )
+        raise RuntimeError("a CPT transaction with valid tokens requires gradients from " "a successful backward pass")
     if token_count == 0 and has_gradients:
-        raise RuntimeError(
-            "an all-padding CPT transaction requires Router gradients "
-            "to be absent"
-        )
+        raise RuntimeError("an all-padding CPT transaction requires Router gradients " "to be absent")
 
     state_version = cpt_model.get_cpt_state_version()
     if state_version == torch.iinfo(torch.int64).max:
@@ -617,13 +521,9 @@ def _preflight_cpt_optimizer_step(model, optimizer, transaction) -> int:
         return current_optimizer_step
     if current_optimizer_step == torch.iinfo(torch.int64).max:
         raise RuntimeError("CPT optimizer_step overflow")
-    if (
-        optimizer_type is torch.optim.AdamW
-        and current_optimizer_step >= _MAX_EXACT_FP32_INTEGER
-    ):
+    if optimizer_type is torch.optim.AdamW and current_optimizer_step >= _MAX_EXACT_FP32_INTEGER:
         raise RuntimeError(
-            "standard AdamW cannot represent the next CPT optimizer step "
-            "exactly; use a fresh supported training run"
+            "standard AdamW cannot represent the next CPT optimizer step " "exactly; use a fresh supported training run"
         )
     return current_optimizer_step + 1
 
@@ -648,9 +548,7 @@ def _validate_post_step_cpt_optimizer_state(
     if expected_optimizer_step != cpt_model.get_cpt_optimizer_step() or any(
         parameter in optimizer.state for parameter in parameters
     ):
-        raise TypeError(
-            "CPT transactional step validation supports AdamW only"
-        )
+        raise TypeError("CPT transactional step validation supports AdamW only")
 
 
 def _serialized_optimizer_parameter_ids(optimizer, optimizer_state):
@@ -660,18 +558,14 @@ def _serialized_optimizer_parameter_ids(optimizer, optimizer_state):
     if set(canonical_state) != _ADAMW_OPTIMIZER_STATE_FIELDS:
         raise RuntimeError("live AdamW optimizer state schema is unsupported")
     if set(optimizer_state) != _ADAMW_OPTIMIZER_STATE_FIELDS:
-        raise RuntimeError(
-            "serialized optimizer state contains unexpected or missing fields"
-        )
+        raise RuntimeError("serialized optimizer state contains unexpected or missing fields")
     state = optimizer_state["state"]
     serialized_groups = optimizer_state["param_groups"]
     canonical_groups = canonical_state["param_groups"]
     if not isinstance(state, dict) or not isinstance(serialized_groups, list):
         raise RuntimeError("serialized optimizer state is malformed")
     if len(serialized_groups) != len(canonical_groups):
-        raise RuntimeError(
-            "serialized optimizer parameter-group structure mismatch"
-        )
+        raise RuntimeError("serialized optimizer parameter-group structure mismatch")
 
     parameter_ids = {}
     seen_serialized_ids = set()
@@ -685,30 +579,18 @@ def _serialized_optimizer_parameter_ids(optimizer, optimizer_state):
         canonical_group_fields = frozenset(canonical_group)
         supported_group_fields = (
             _ADAMW_PARAMETER_GROUP_FIELDS,
-            _ADAMW_PARAMETER_GROUP_FIELDS
-            | {_ADAMW_SCHEDULER_GROUP_FIELD},
+            _ADAMW_PARAMETER_GROUP_FIELDS | {_ADAMW_SCHEDULER_GROUP_FIELD},
         )
         if canonical_group_fields not in supported_group_fields:
             raise RuntimeError("live AdamW parameter-group schema is unsupported")
         serialized_group_fields = frozenset(serialized_group)
         allowed_serialized_fields = {canonical_group_fields}
         if _ADAMW_SCHEDULER_GROUP_FIELD not in canonical_group_fields:
-            allowed_serialized_fields.add(
-                _ADAMW_PARAMETER_GROUP_FIELDS
-                | {_ADAMW_SCHEDULER_GROUP_FIELD}
-            )
+            allowed_serialized_fields.add(_ADAMW_PARAMETER_GROUP_FIELDS | {_ADAMW_SCHEDULER_GROUP_FIELD})
         if serialized_group_fields not in allowed_serialized_fields:
-            raise RuntimeError(
-                "serialized optimizer parameter group contains unexpected or "
-                "missing fields"
-            )
-        if (
-            _ADAMW_SCHEDULER_GROUP_FIELD in canonical_group
-            and _ADAMW_SCHEDULER_GROUP_FIELD not in serialized_group
-        ):
-            raise RuntimeError(
-                "serialized optimizer parameter group is missing initial_lr"
-            )
+            raise RuntimeError("serialized optimizer parameter group contains unexpected or " "missing fields")
+        if _ADAMW_SCHEDULER_GROUP_FIELD in canonical_group and _ADAMW_SCHEDULER_GROUP_FIELD not in serialized_group:
+            raise RuntimeError("serialized optimizer parameter group is missing initial_lr")
         for name in canonical_group_fields - {
             "params",
             "lr",
@@ -717,17 +599,12 @@ def _serialized_optimizer_parameter_ids(optimizer, optimizer_state):
         }:
             saved_value = serialized_group[name]
             canonical_value = canonical_group[name]
-            if type(saved_value) is not type(canonical_value) or (
-                isinstance(saved_value, torch.Tensor)
-                and not torch.equal(saved_value, canonical_value)
-            ) or (
-                not isinstance(saved_value, torch.Tensor)
-                and saved_value != canonical_value
+            if (
+                type(saved_value) is not type(canonical_value)
+                or (isinstance(saved_value, torch.Tensor) and not torch.equal(saved_value, canonical_value))
+                or (not isinstance(saved_value, torch.Tensor) and saved_value != canonical_value)
             ):
-                raise RuntimeError(
-                    "serialized optimizer parameter group changes AdamW "
-                    f"algorithm field {name}"
-                )
+                raise RuntimeError("serialized optimizer parameter group changes AdamW " f"algorithm field {name}")
         for name in ("lr", "weight_decay"):
             _validate_adamw_group_float(
                 name,
@@ -747,33 +624,25 @@ def _serialized_optimizer_parameter_ids(optimizer, optimizer_state):
         live_parameters = live_group.get("params")
         canonical_parameters = canonical_group.get("params")
         serialized_parameters = serialized_group.get("params")
-        if not isinstance(live_parameters, list) or not isinstance(
-            canonical_parameters,
-            list,
-        ) or not isinstance(
-            serialized_parameters,
-            list,
+        if (
+            not isinstance(live_parameters, list)
+            or not isinstance(
+                canonical_parameters,
+                list,
+            )
+            or not isinstance(
+                serialized_parameters,
+                list,
+            )
         ):
             raise RuntimeError("serialized optimizer parameter group is malformed")
-        if (
-            len(live_parameters) != len(canonical_parameters)
-            or len(live_parameters) != len(serialized_parameters)
-        ):
-            raise RuntimeError(
-                "serialized optimizer parameter-group structure mismatch"
-            )
+        if len(live_parameters) != len(canonical_parameters) or len(live_parameters) != len(serialized_parameters):
+            raise RuntimeError("serialized optimizer parameter-group structure mismatch")
         for serialized_id in serialized_parameters:
-            if (
-                isinstance(serialized_id, bool)
-                or not isinstance(serialized_id, int)
-                or serialized_id < 0
-            ):
+            if isinstance(serialized_id, bool) or not isinstance(serialized_id, int) or serialized_id < 0:
                 raise RuntimeError("serialized optimizer parameter id is invalid")
         if serialized_parameters != canonical_parameters:
-            raise RuntimeError(
-                "serialized optimizer parameter ids disagree with the live "
-                "optimizer's canonical order"
-            )
+            raise RuntimeError("serialized optimizer parameter ids disagree with the live " "optimizer's canonical order")
         for parameter, serialized_id in zip(
             live_parameters,
             serialized_parameters,
@@ -786,11 +655,7 @@ def _serialized_optimizer_parameter_ids(optimizer, optimizer_state):
             seen_serialized_ids.add(serialized_id)
             parameter_ids[parameter_identity] = serialized_id
     for serialized_id in state:
-        if (
-            isinstance(serialized_id, bool)
-            or not isinstance(serialized_id, int)
-            or serialized_id < 0
-        ):
+        if isinstance(serialized_id, bool) or not isinstance(serialized_id, int) or serialized_id < 0:
             raise RuntimeError("serialized optimizer state id is invalid")
         if serialized_id not in seen_serialized_ids:
             raise RuntimeError("serialized optimizer state contains an orphan entry")
@@ -802,9 +667,7 @@ def _cpt_optimizer_parameter_bindings(named_parameters, parameter_ids):
     for name, parameter in named_parameters:
         serialized_id = parameter_ids.get(id(parameter))
         if serialized_id is None:
-            raise RuntimeError(
-                "serialized optimizer is missing a bound CPT parameter"
-            )
+            raise RuntimeError("serialized optimizer is missing a bound CPT parameter")
         bindings.append((name, serialized_id))
     return tuple(bindings)
 
@@ -845,11 +708,9 @@ def validate_serialized_cpt_optimizer_state(
         expected_presence,
         known_names,
     )
-    expected_parameter_bindings = (
-        _normalize_cpt_optimizer_parameter_bindings(
-            expected_parameter_bindings,
-            known_names,
-        )
+    expected_parameter_bindings = _normalize_cpt_optimizer_parameter_bindings(
+        expected_parameter_bindings,
+        known_names,
     )
     serialized_state, parameter_ids = _serialized_optimizer_parameter_ids(
         optimizer,
@@ -860,9 +721,7 @@ def validate_serialized_cpt_optimizer_state(
         parameter_ids,
     )
     if actual_parameter_bindings != expected_parameter_bindings:
-        raise RuntimeError(
-            "CPT optimizer parameter bindings disagree with the checkpoint manifest"
-        )
+        raise RuntimeError("CPT optimizer parameter bindings disagree with the checkpoint manifest")
 
     actual_presence = []
     initialized_entries = []
@@ -870,17 +729,13 @@ def validate_serialized_cpt_optimizer_state(
         serialized_id = parameter_ids[id(parameter)]
         if serialized_id in serialized_state:
             actual_presence.append(name)
-            initialized_entries.append(
-                (serialized_state[serialized_id], parameter)
-            )
+            initialized_entries.append((serialized_state[serialized_id], parameter))
     actual_presence = _normalize_cpt_optimizer_state_presence(
         actual_presence,
         known_names,
     )
     if actual_presence != expected_presence:
-        raise RuntimeError(
-            "CPT optimizer state presence disagrees with checkpoint manifest"
-        )
+        raise RuntimeError("CPT optimizer state presence disagrees with checkpoint manifest")
     optimizer_type = type(optimizer)
     steps = []
     for entry, parameter in initialized_entries:
@@ -923,11 +778,7 @@ def _snapshot_cpt_optimizer_state(model, optimizer):
 
     snapshot = []
     for parameter in cpt_parameters:
-        state = (
-            _clone_optimizer_value(optimizer.state[parameter])
-            if parameter in optimizer.state
-            else _MISSING_OPTIMIZER_STATE
-        )
+        state = _clone_optimizer_value(optimizer.state[parameter]) if parameter in optimizer.state else _MISSING_OPTIMIZER_STATE
         snapshot.append((parameter, parameter.detach().clone(), state))
     return tuple(snapshot)
 
@@ -960,9 +811,7 @@ def _execute_cpt_optimizer_step(model, optimizer, scheduler, transaction) -> int
             pass
         raise
     snapshot = _snapshot_cpt_optimizer_state(model, optimizer)
-    persistent_snapshot = tuple(
-        router.commit_snapshot() for router in cpt_model._cpt_routers()
-    )
+    persistent_snapshot = tuple(router.commit_snapshot() for router in cpt_model._cpt_routers())
     try:
         optimizer.step()
         _validate_post_step_cpt_optimizer_state(
@@ -989,9 +838,7 @@ def _execute_cpt_optimizer_step(model, optimizer, scheduler, transaction) -> int
             _restore_cpt_optimizer_state(optimizer, snapshot)
         except BaseException as error:
             recovery_errors.append(error)
-        for router, router_snapshot in zip(
-            cpt_model._cpt_routers(), persistent_snapshot
-        ):
+        for router, router_snapshot in zip(cpt_model._cpt_routers(), persistent_snapshot):
             try:
                 router.restore_commit_snapshot(router_snapshot)
             except BaseException as error:
@@ -999,12 +846,8 @@ def _execute_cpt_optimizer_step(model, optimizer, scheduler, transaction) -> int
         # A real optimizer may already have partially changed ordinary model
         # parameters.  Do not allow this live process to continue or save.
         if recovery_errors:
-            failure_types = ", ".join(
-                type(error).__name__ for error in recovery_errors
-            )
-            raise RuntimeError(
-                "CPT step failed and recovery was incomplete: " + failure_types
-            ) from recovery_errors[0]
+            failure_types = ", ".join(type(error).__name__ for error in recovery_errors)
+            raise RuntimeError("CPT step failed and recovery was incomplete: " + failure_types) from recovery_errors[0]
         raise
     return version
 
@@ -1030,12 +873,10 @@ def save_training_state(
     cpt_state_version = cpt_model.get_cpt_state_version()
     cpt_optimizer_state_presence = validate_cpt_optimizer_state(model, opt)
     optimizer_state = opt.state_dict()
-    cpt_optimizer_parameter_bindings = (
-        _serialized_cpt_optimizer_parameter_bindings(
-            model,
-            opt,
-            optimizer_state,
-        )
+    cpt_optimizer_parameter_bindings = _serialized_cpt_optimizer_parameter_bindings(
+        model,
+        opt,
+        optimizer_state,
     )
     cpt_optimizer_state_dtype = get_cpt_optimizer_state_dtype(opt)
     validate_serialized_cpt_optimizer_state(
@@ -1055,9 +896,7 @@ def save_training_state(
         "total_steps": total_steps,
         "cpt_state_version": cpt_state_version,
         "cpt_optimizer_state_presence": cpt_optimizer_state_presence,
-        "cpt_optimizer_parameter_bindings": (
-            cpt_optimizer_parameter_bindings
-        ),
+        "cpt_optimizer_parameter_bindings": (cpt_optimizer_parameter_bindings),
         "cpt_optimizer_state_dtype": cpt_optimizer_state_dtype,
     }
     if fi is not None:
@@ -1069,9 +908,21 @@ def save_training_state(
     torch.save(state, path)
 
 
-def save_checkpoint(model, opt, sched, output_dir, step, total_tok,
-                    warmup_steps, total_steps, fi, ptr,
-                    batch_size=None, seq_len=None, final=False):
+def save_checkpoint(
+    model,
+    opt,
+    sched,
+    output_dir,
+    step,
+    total_tok,
+    warmup_steps,
+    total_steps,
+    fi,
+    ptr,
+    batch_size=None,
+    seq_len=None,
+    final=False,
+):
     """完整写入临时目录后原子发布 checkpoint。"""
     cpt_model = _unwrap_cpt_model(model)
     _assert_not_poisoned(model, cpt_model, opt, sched)
@@ -1087,8 +938,18 @@ def save_checkpoint(model, opt, sched, output_dir, step, total_tok,
     try:
         torch.save(cpt_model.state_dict(), temp / "pytorch_model.bin")
         save_training_state(
-            temp / "training_state.pt", model, opt, sched, step, total_tok,
-            warmup_steps, total_steps, fi, ptr, batch_size, seq_len,
+            temp / "training_state.pt",
+            model,
+            opt,
+            sched,
+            step,
+            total_tok,
+            warmup_steps,
+            total_steps,
+            fi,
+            ptr,
+            batch_size,
+            seq_len,
         )
         cpt_model.config.save_pretrained(str(temp))
         os.replace(temp, target)
@@ -1100,10 +961,7 @@ def save_checkpoint(model, opt, sched, output_dir, step, total_tok,
 
 def prune_periodic_checkpoints(output_dir, keep_last):
     """仅保留最近的周期 checkpoint；final checkpoint 永不删除。"""
-    checkpoints = sorted(
-        path for path in Path(output_dir).glob("step_*")
-        if path.is_dir() and not path.name.endswith("_final")
-    )
+    checkpoints = sorted(path for path in Path(output_dir).glob("step_*") if path.is_dir() and not path.name.endswith("_final"))
     for path in checkpoints[:-keep_last]:
         shutil.rmtree(path)
 
@@ -1116,18 +974,23 @@ def check_checkpoint_disk_space(model, output_dir, keep_last):
         probe_path = probe_path.parent
 
     parameter_bytes = sum(
-        parameter.numel() * parameter.element_size()
-        for parameter in model.parameters() if parameter.requires_grad
+        parameter.numel() * parameter.element_size() for parameter in model.parameters() if parameter.requires_grad
     )
     buffer_bytes = sum(buffer.numel() * buffer.element_size() for buffer in model.buffers())
     checkpoint_bytes = int((3 * parameter_bytes + buffer_bytes) * 1.15)
     checkpoint_bytes = max(checkpoint_bytes, 64 * 1024**2)
     target_bytes = checkpoint_bytes * (keep_last + 2)
-    existing_bytes = sum(
-        file.stat().st_size
-        for checkpoint in output_path.glob("step_*") if checkpoint.is_dir()
-        for file in checkpoint.rglob("*") if file.is_file()
-    ) if output_path.exists() else 0
+    existing_bytes = (
+        sum(
+            file.stat().st_size
+            for checkpoint in output_path.glob("step_*")
+            if checkpoint.is_dir()
+            for file in checkpoint.rglob("*")
+            if file.is_file()
+        )
+        if output_path.exists()
+        else 0
+    )
     additional_bytes = max(checkpoint_bytes, target_bytes - existing_bytes)
     free_bytes = shutil.disk_usage(probe_path).free
     if free_bytes < additional_bytes:
@@ -1137,8 +1000,7 @@ def check_checkpoint_disk_space(model, output_dir, keep_last):
             f"only {free_bytes / 1024**3:.1f} GiB free at {probe_path}"
         )
     print(
-        f"Checkpoint disk preflight: ~{checkpoint_bytes / 1024**3:.1f} GiB each, "
-        f"{free_bytes / 1024**3:.1f} GiB free",
+        f"Checkpoint disk preflight: ~{checkpoint_bytes / 1024**3:.1f} GiB each, " f"{free_bytes / 1024**3:.1f} GiB free",
         flush=True,
     )
 
@@ -1158,6 +1020,7 @@ def make_cosine_schedule(opt, warmup_steps, total_steps):
             progress = (s - warmup_steps + 1) / max(1, total_steps - warmup_steps)
         progress = min(max(progress, 0.0), 1.0)
         return 0.5 * (1.0 + math.cos(math.pi * progress))
+
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
@@ -1185,12 +1048,14 @@ def make_wsd_schedule(opt, warmup_steps, total_steps, decay_ratio=0.1):
         progress = (s - decay_start + 1) / max(1, total_steps - decay_start)
         progress = min(max(progress, 0.0), 1.0)
         return 1.0 - progress
+
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
 # ============================================================
 # CPU eval 子进程
 # ============================================================
+
 
 def run_cpu_eval(checkpoint_path, eval_dir):
     """子进程 CPU GLUE eval。"""
@@ -1201,12 +1066,30 @@ def run_cpu_eval(checkpoint_path, eval_dir):
     # 删除旧结果，防止子进程失败时误读
     if output.exists():
         output.unlink()
-    cmd = [sys.executable, str(script),
-           "--checkpoint", checkpoint_path, "--tokenizer", str(tokenizer_path),
-           "--tasks", "sst2,mrpc,qnli,rte,cola", "--limit", "200",
-           "--batch-size", "2", "--max-length", "256",
-           "--device", "cpu", "--precision", "fp32",
-           "--output", str(output), "--seed", "1234"]
+    cmd = [
+        sys.executable,
+        str(script),
+        "--checkpoint",
+        checkpoint_path,
+        "--tokenizer",
+        str(tokenizer_path),
+        "--tasks",
+        "sst2,mrpc,qnli,rte,cola",
+        "--limit",
+        "200",
+        "--batch-size",
+        "2",
+        "--max-length",
+        "256",
+        "--device",
+        "cpu",
+        "--precision",
+        "fp32",
+        "--output",
+        str(output),
+        "--seed",
+        "1234",
+    ]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if r.returncode != 0:
@@ -1214,17 +1097,34 @@ def run_cpu_eval(checkpoint_path, eval_dir):
             print(f"  [eval err] exit={r.returncode} stderr={stderr_tail}", flush=True)
             return None, None  # 失败后不读旧结果
         if output.exists():
-            with open(output) as f: d = json.load(f)
+            with open(output) as f:
+                d = json.load(f)
             return d.get("aggregate", {}).get("mean_score"), d.get("results", {})
     except Exception as e:
         print(f"  [eval err] {e}", flush=True)
     return None, None
 
 
-def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
-                  output_dir, max_steps, save_every_min, log_every, step_start=0,
-                  schedule_args=None, eval_on_save=False,
-                  keep_last_checkpoints=5):
+def training_loop(
+    model,
+    opt,
+    sched,
+    files,
+    fi,
+    ptr,
+    total_tok,
+    bs,
+    seq,
+    chunk,
+    output_dir,
+    max_steps,
+    save_every_min,
+    log_every,
+    step_start=0,
+    schedule_args=None,
+    eval_on_save=False,
+    keep_last_checkpoints=5,
+):
     """按绝对 step 目标训练。
 
     schedule_args: 可选 dict with warmup_steps, total_steps，用于 checkpoint 恢复。
@@ -1271,7 +1171,7 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                 else:
                     raise RuntimeError(f"No shard contains at least {chunk} tokens")
 
-            batch = shard[ptr:ptr + chunk]
+            batch = shard[ptr : ptr + chunk]
             if batch.numel() != chunk:
                 print(f"  WARN: short read {batch.numel()}/{chunk} shard={fi}", flush=True)
                 ptr = 0
@@ -1295,16 +1195,11 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                     out = model(batch[:, :-1], labels=batch[:, 1:])
                 transaction = out.get("cpt_transaction")
                 if not torch.isfinite(out["loss"]):
-                    raise FloatingPointError(
-                        f"Non-finite loss at step {step + 1}: {out['loss'].item()}"
-                    )
+                    raise FloatingPointError(f"Non-finite loss at step {step + 1}: {out['loss'].item()}")
                 out["loss"].backward()
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 if not torch.isfinite(grad_norm):
-                    raise FloatingPointError(
-                        f"Non-finite gradient norm at step {step + 1}: "
-                        f"{grad_norm.item()}"
-                    )
+                    raise FloatingPointError(f"Non-finite gradient norm at step {step + 1}: " f"{grad_norm.item()}")
                 # Preserve upstream optimizer/scheduler mathematics and
                 # ordering; the only insertion is the CPT commit between them.
                 _execute_cpt_optimizer_step(model, opt, sched, transaction)
@@ -1318,19 +1213,31 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
             if step % log_every == 0:
                 elapsed = time.time() - t0
                 hours_elapsed = elapsed / 3600
-                print(f"  step {step:7d}: loss={out['loss'].item():.4f} "
-                      f"aux={out['aux_loss'].item():.1f} "
-                      f"tok/s={(total_tok - tok_base) / elapsed:.0f} "
-                      f"lr={sched.get_last_lr()[0]:.2e} "
-                      f"shard={fi}/{len(files)} "
-                      f"[{hours_elapsed:.1f}h]", flush=True)
+                print(
+                    f"  step {step:7d}: loss={out['loss'].item():.4f} "
+                    f"aux={out['aux_loss'].item():.1f} "
+                    f"tok/s={(total_tok - tok_base) / elapsed:.0f} "
+                    f"lr={sched.get_last_lr()[0]:.2e} "
+                    f"shard={fi}/{len(files)} "
+                    f"[{hours_elapsed:.1f}h]",
+                    flush=True,
+                )
 
             # ---- 保存 + eval ----
             if time.time() - last_save > save_every_min * 60:
                 d = save_checkpoint(
-                    model, opt, sched, output_dir, step, total_tok,
-                    sa.get("warmup_steps", 0), sa.get("total_steps", 0), fi, ptr,
-                    bs, seq,
+                    model,
+                    opt,
+                    sched,
+                    output_dir,
+                    step,
+                    total_tok,
+                    sa.get("warmup_steps", 0),
+                    sa.get("total_steps", 0),
+                    fi,
+                    ptr,
+                    bs,
+                    seq,
                 )
                 print(f"  -> Saved {d}", flush=True)
                 prune_periodic_checkpoints(output_dir, keep_last_checkpoints)
@@ -1341,8 +1248,10 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                     eval_dir = f"evals/{Path(output_dir).name}/step_{step:07d}"
                     mean, res = run_cpu_eval(d, eval_dir)
                     if mean is not None and res:
-                        parts = [f'{t}={r.get("accuracy", r.get("matthews_correlation", r.get("f1", float("nan")))):.3f}'
-                                 for t, r in sorted(res.items())]
+                        parts = [
+                            f'{t}={r.get("accuracy", r.get("matthews_correlation", r.get("f1", float("nan")))):.3f}'
+                            for t, r in sorted(res.items())
+                        ]
                         print(f"  [eval] mean={mean:.4f} | {' '.join(parts)}", flush=True)
 
             if stop_signal is not None:
@@ -1350,9 +1259,18 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                     print("  -> Current step was already checkpointed", flush=True)
                 else:
                     d = save_checkpoint(
-                        model, opt, sched, output_dir, step, total_tok,
-                        sa.get("warmup_steps", 0), sa.get("total_steps", 0), fi, ptr,
-                        bs, seq,
+                        model,
+                        opt,
+                        sched,
+                        output_dir,
+                        step,
+                        total_tok,
+                        sa.get("warmup_steps", 0),
+                        sa.get("total_steps", 0),
+                        fi,
+                        ptr,
+                        bs,
+                        seq,
                     )
                     print(f"  -> Emergency checkpoint saved: {d}", flush=True)
                     prune_periodic_checkpoints(output_dir, keep_last_checkpoints)
@@ -1365,14 +1283,22 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
     return step, total_tok, fi, ptr, elapsed
 
 
-def final_save(model, opt, sched, output_dir, step, total_tok, elapsed,
-               fi, ptr, batch_size, seq_len, schedule_args=None):
+def final_save(model, opt, sched, output_dir, step, total_tok, elapsed, fi, ptr, batch_size, seq_len, schedule_args=None):
     """保存最终 checkpoint。"""
     sa = schedule_args or {}
     d = save_checkpoint(
-        model, opt, sched, output_dir, step, total_tok,
-        sa.get("warmup_steps", 0), sa.get("total_steps", 0), fi, ptr,
-        batch_size, seq_len, final=True,
+        model,
+        opt,
+        sched,
+        output_dir,
+        step,
+        total_tok,
+        sa.get("warmup_steps", 0),
+        sa.get("total_steps", 0),
+        fi,
+        ptr,
+        batch_size,
+        seq_len,
+        final=True,
     )
-    print(f"\nDone: {step} steps {total_tok / 1e9:.3f}B tokens "
-          f"session={elapsed / 3600:.1f}h → {d}", flush=True)
+    print(f"\nDone: {step} steps {total_tok / 1e9:.3f}B tokens " f"session={elapsed / 3600:.1f}h → {d}", flush=True)

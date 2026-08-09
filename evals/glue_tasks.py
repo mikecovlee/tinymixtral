@@ -6,10 +6,10 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-
 # ============================================================
 # 任务注册
 # ============================================================
+
 
 @dataclass
 class GlueTask:
@@ -24,37 +24,61 @@ class GlueTask:
 
 GLUE_TASKS: dict[str, GlueTask] = {
     "sst2": GlueTask(
-        name="sst2", dataset_config="sst2", num_labels=2,
-        metric_fn="accuracy", input_fields=["sentence"],
+        name="sst2",
+        dataset_config="sst2",
+        num_labels=2,
+        metric_fn="accuracy",
+        input_fields=["sentence"],
     ),
     "mrpc": GlueTask(
-        name="mrpc", dataset_config="mrpc", num_labels=2,
-        metric_fn="f1", input_fields=["sentence1", "sentence2"],
+        name="mrpc",
+        dataset_config="mrpc",
+        num_labels=2,
+        metric_fn="f1",
+        input_fields=["sentence1", "sentence2"],
     ),
     "qqp": GlueTask(
-        name="qqp", dataset_config="qqp", num_labels=2,
-        metric_fn="f1", input_fields=["question1", "question2"],
+        name="qqp",
+        dataset_config="qqp",
+        num_labels=2,
+        metric_fn="f1",
+        input_fields=["question1", "question2"],
     ),
     "qnli": GlueTask(
-        name="qnli", dataset_config="qnli", num_labels=2,
-        metric_fn="accuracy", input_fields=["question", "sentence"],
+        name="qnli",
+        dataset_config="qnli",
+        num_labels=2,
+        metric_fn="accuracy",
+        input_fields=["question", "sentence"],
     ),
     "rte": GlueTask(
-        name="rte", dataset_config="rte", num_labels=2,
-        metric_fn="accuracy", input_fields=["sentence1", "sentence2"],
+        name="rte",
+        dataset_config="rte",
+        num_labels=2,
+        metric_fn="accuracy",
+        input_fields=["sentence1", "sentence2"],
     ),
     "cola": GlueTask(
-        name="cola", dataset_config="cola", num_labels=2,
-        metric_fn="matthews_corrcoef", input_fields=["sentence"],
+        name="cola",
+        dataset_config="cola",
+        num_labels=2,
+        metric_fn="matthews_corrcoef",
+        input_fields=["sentence"],
     ),
     "mnli": GlueTask(
-        name="mnli", dataset_config="mnli", num_labels=3,
-        metric_fn="accuracy", eval_split="validation_matched",
+        name="mnli",
+        dataset_config="mnli",
+        num_labels=3,
+        metric_fn="accuracy",
+        eval_split="validation_matched",
         input_fields=["premise", "hypothesis"],
     ),
     "mnli_mismatched": GlueTask(
-        name="mnli_mismatched", dataset_config="mnli", num_labels=3,
-        metric_fn="accuracy", eval_split="validation_mismatched",
+        name="mnli_mismatched",
+        dataset_config="mnli",
+        num_labels=3,
+        metric_fn="accuracy",
+        eval_split="validation_mismatched",
         input_fields=["premise", "hypothesis"],
     ),
 }
@@ -107,6 +131,7 @@ GLUE_TEMPLATES = {
 # 辅助函数
 # ============================================================
 
+
 def get_task(task_name: str) -> GlueTask:
     if task_name not in GLUE_TASKS:
         raise KeyError(f"Unknown task: {task_name}. Available: {list(GLUE_TASKS.keys())}")
@@ -115,6 +140,7 @@ def get_task(task_name: str) -> GlueTask:
 
 def load_glue_dataset(task: GlueTask, split: str = "validation", limit: Optional[int] = None):
     from datasets import load_dataset
+
     dataset = load_dataset("glue", task.dataset_config, split=split)
     if limit is not None and limit > 0:
         dataset = dataset.select(range(min(limit, len(dataset))))

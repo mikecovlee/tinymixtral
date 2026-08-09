@@ -18,9 +18,9 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
-from scripts.train_utils import make_adamw
+from model.config import TinyMixtralConfig  # noqa: E402
+from model.modeling import TinyMixtralForCausalLM  # noqa: E402
+from scripts.train_utils import make_adamw  # noqa: E402
 
 
 def get_gpu_info():
@@ -38,6 +38,7 @@ def get_gpu_util():
     """通过 pynvml 获取 GPU 利用率。失败时返回 (-1, -1)。"""
     try:
         import pynvml
+
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         util = pynvml.nvmlDeviceGetUtilizationRates(handle)
@@ -62,10 +63,16 @@ def test_config(hs, nl, ne, bs, sl, steps=5):
 
     try:
         config = TinyMixtralConfig(
-            hidden_size=hs, num_hidden_layers=nl,
-            num_attention_heads=n_heads, num_key_value_heads=n_kv, head_dim=64,
-            num_local_experts=ne, num_experts_per_tok=min(2, ne),
-            expert_intermediate_size=int(hs * 8//3), max_position_embeddings=sl, vocab_size=32000,
+            hidden_size=hs,
+            num_hidden_layers=nl,
+            num_attention_heads=n_heads,
+            num_key_value_heads=n_kv,
+            head_dim=64,
+            num_local_experts=ne,
+            num_experts_per_tok=min(2, ne),
+            expert_intermediate_size=int(hs * 8 // 3),
+            max_position_embeddings=sl,
+            vocab_size=32000,
         )
         model = TinyMixtralForCausalLM(config)
         model.gradient_checkpointing_enable()
@@ -120,8 +127,11 @@ def test_config(hs, nl, ne, bs, sl, steps=5):
 
         return {
             "ok": True,
-            "hidden_size": hs, "num_layers": nl, "num_experts": ne,
-            "batch_size": bs, "seq_len": sl,
+            "hidden_size": hs,
+            "num_layers": nl,
+            "num_experts": ne,
+            "batch_size": bs,
+            "seq_len": sl,
             "params_M": round(nM, 1),
             "peak_memory_gb": round(peak_gb, 2),
             "memory_pct": round(mem_pct, 1),
@@ -133,13 +143,19 @@ def test_config(hs, nl, ne, bs, sl, steps=5):
     except torch.cuda.OutOfMemoryError:
         gc.collect()
         torch.cuda.empty_cache()
-        return {"ok": False, "hidden_size": hs, "num_layers": nl, "num_experts": ne,
-                "batch_size": bs, "seq_len": sl}
+        return {"ok": False, "hidden_size": hs, "num_layers": nl, "num_experts": ne, "batch_size": bs, "seq_len": sl}
     except Exception as e:
         gc.collect()
         torch.cuda.empty_cache()
-        return {"ok": False, "hidden_size": hs, "num_layers": nl, "num_experts": ne,
-                "batch_size": bs, "seq_len": sl, "error": str(e)[:80]}
+        return {
+            "ok": False,
+            "hidden_size": hs,
+            "num_layers": nl,
+            "num_experts": ne,
+            "batch_size": bs,
+            "seq_len": sl,
+            "error": str(e)[:80],
+        }
 
 
 def compute_score(r, gpu_info):
@@ -202,8 +218,10 @@ def run_benchmark(output_path, quick=False):
                         r["score"] = compute_score(r, gpu_info)
                         results.append(r)
                         util_str = f'{r.get("gpu_util_pct", "?"):.0f}%' if r.get("gpu_util_pct") else "N/A"
-                        print(f'{hs}d/{nl}L/{ne}E      {r["params_M"]:>6.0f}M {bs:>3} '
-                              f'{r["peak_memory_gb"]:>5.1f}G {util_str:>5} {r["tokens_per_sec"]:>6.0f} {r["score"]:>6.3f}')
+                        print(
+                            f'{hs}d/{nl}L/{ne}E      {r["params_M"]:>6.0f}M {bs:>3} '
+                            f'{r["peak_memory_gb"]:>5.1f}G {util_str:>5} {r["tokens_per_sec"]:>6.0f} {r["score"]:>6.3f}'
+                        )
 
                     if tested % 30 == 0:
                         print(f"  ... {tested}/{total_tests}, {len(results)} feasible")

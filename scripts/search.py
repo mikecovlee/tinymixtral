@@ -7,22 +7,28 @@
     python scripts/search.py --trials 20 --steps-per-trial 2000
 """
 
-import argparse, csv, gc, glob, json, os, sys, time
+import argparse
+import csv
+import gc
+import glob
+import os
+import sys
+import time
 from pathlib import Path
 
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
-from scripts.train_utils import make_cosine_schedule, make_adamw
-from transformers import AutoTokenizer
-from datasets import load_dataset
+from transformers import AutoTokenizer  # noqa: E402
 
+from model.config import TinyMixtralConfig  # noqa: E402
+from model.modeling import TinyMixtralForCausalLM  # noqa: E402
+from scripts.train_utils import make_adamw, make_cosine_schedule  # noqa: E402
 
 # ============================================================
 # 数据加载（一次性，所有 trial 共享）
 # ============================================================
+
 
 def load_local_data(data_dir="data/c4/tokenized", max_tokens=10_000_000):
     """从本地 shard 加载有限 token，避免搜索时读入完整训练集。"""
@@ -44,8 +50,8 @@ def load_local_data(data_dir="data/c4/tokenized", max_tokens=10_000_000):
 # 训练
 # ============================================================
 
-def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
-                lr, warmup_ratio, weight_decay, aux_coef, seed):
+
+def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len, lr, warmup_ratio, weight_decay, aux_coef, seed):
     """训练一个 trial，返回 (model, final_loss, tokens_per_sec)。"""
     torch.manual_seed(seed)
 
@@ -53,11 +59,13 @@ def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
         hidden_size=config_dict["hidden_size"],
         num_hidden_layers=config_dict["num_layers"],
         num_attention_heads=config_dict["hidden_size"] // 64,
-        num_key_value_heads=2, head_dim=64,
+        num_key_value_heads=2,
+        head_dim=64,
         num_local_experts=config_dict["num_experts"],
         num_experts_per_tok=2,
         expert_intermediate_size=int(config_dict["hidden_size"] * 8 / 3),
-        max_position_embeddings=seq_len, vocab_size=32000,
+        max_position_embeddings=seq_len,
+        vocab_size=32000,
         router_aux_loss_coef=aux_coef,
     )
 
@@ -83,7 +91,7 @@ def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
     for step in range(1, steps + 1):
         if data_ptr + chunk_size > len(all_data):
             data_ptr = 0
-        chunk = all_data[data_ptr:data_ptr + chunk_size].view(batch_size, seq_len + 1).to("cuda")
+        chunk = all_data[data_ptr : data_ptr + chunk_size].view(batch_size, seq_len + 1).to("cuda")
         data_ptr += chunk_size  # advance by one full batch of raw tokens
         total_tokens += batch_size * seq_len
 
@@ -98,10 +106,10 @@ def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         if not torch.isfinite(grad_norm):
             optimizer.zero_grad(set_to_none=True)
-            raise FloatingPointError(
-                f"Non-finite gradient norm at search step {step}: {grad_norm.item()}"
-            )
-        optimizer.step(); scheduler.step(); optimizer.zero_grad()
+            raise FloatingPointError(f"Non-finite gradient norm at search step {step}: {grad_norm.item()}")
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
 
         losses.append(out["loss"].item())
 
@@ -116,12 +124,18 @@ def train_trial(config_dict, all_data, tokenizer, steps, batch_size, seq_len,
 # GLUE 评测（进程内，不加载/卸载模型）
 # ============================================================
 
+
 def eval_trial(model, tokenizer, tasks, limit, batch_size, max_length):
     """进程内 GLUE zero-shot 评测。"""
-    from evals.glue_tasks import (GLUE_TEMPLATES, get_task, load_glue_dataset,
-                                   format_prompt, get_verbalizer_labels)
-    from evals.prompt_scoring import score_answers
+    from evals.glue_tasks import (
+        GLUE_TEMPLATES,
+        format_prompt,
+        get_task,
+        get_verbalizer_labels,
+        load_glue_dataset,
+    )
     from evals.metrics import accuracy_score, f1_score, matthews_corrcoef
+    from evals.prompt_scoring import score_answers
 
     results = {}
     tokenizer.padding_side = "left"
@@ -139,16 +153,21 @@ def eval_trial(model, tokenizer, tasks, limit, batch_size, max_length):
         gold = [ex["label"] for ex in ds]
         label_ids, answers = get_verbalizer_labels(tpl["verbalizer"])
 
-        sr = score_answers(model, tokenizer, prompts,
-                           [answers]*len(prompts), [label_ids]*len(prompts),
-                           batch_size=batch_size, max_length=max_length)
+        sr = score_answers(
+            model,
+            tokenizer,
+            prompts,
+            [answers] * len(prompts),
+            [label_ids] * len(prompts),
+            batch_size=batch_size,
+            max_length=max_length,
+        )
 
         y_pred = [r.predicted_label for r in sr]
         metric = task_def.metric_fn
 
         if metric == "f1":
-            results[task_name] = {"accuracy": round(accuracy_score(gold, y_pred), 4),
-                                  "f1": round(f1_score(gold, y_pred), 4)}
+            results[task_name] = {"accuracy": round(accuracy_score(gold, y_pred), 4), "f1": round(f1_score(gold, y_pred), 4)}
         elif metric == "matthews_corrcoef":
             results[task_name] = {"matthews_correlation": round(matthews_corrcoef(gold, y_pred), 4)}
         else:
@@ -157,8 +176,10 @@ def eval_trial(model, tokenizer, tasks, limit, batch_size, max_length):
     # Aggregate
     scores = []
     for t, r in results.items():
-        if "accuracy" in r: scores.append(r["accuracy"])
-        elif "matthews_correlation" in r: scores.append((r["matthews_correlation"] + 1) / 2)
+        if "accuracy" in r:
+            scores.append(r["accuracy"])
+        elif "matthews_correlation" in r:
+            scores.append((r["matthews_correlation"] + 1) / 2)
     mean_score = round(sum(scores) / len(scores), 4) if scores else 0.0
 
     return results, mean_score
@@ -168,11 +189,12 @@ def eval_trial(model, tokenizer, tasks, limit, batch_size, max_length):
 # 超参生成
 # ============================================================
 
+
 def generate_trials(n):
     """生成搜索网格。"""
     # 架构搜索
     archs = [
-        {"hidden_size": 896, "num_layers": 8,  "num_experts": 6},
+        {"hidden_size": 896, "num_layers": 8, "num_experts": 6},
         {"hidden_size": 896, "num_layers": 10, "num_experts": 6},
         {"hidden_size": 896, "num_layers": 12, "num_experts": 6},
         {"hidden_size": 768, "num_layers": 12, "num_experts": 6},
@@ -186,8 +208,8 @@ def generate_trials(n):
         {"lr": 3e-4, "warmup_ratio": 0.2, "weight_decay": 0.1, "aux_coef": 0.01},
         {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.05, "aux_coef": 0.01},
         {"lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.1, "aux_coef": 0.05},
-        {"lr": 3e-4, "warmup_ratio": 0.05,"weight_decay": 0.1, "aux_coef": 0.01},
-        {"lr": 2e-4, "warmup_ratio": 0.15,"weight_decay": 0.08,"aux_coef": 0.02},
+        {"lr": 3e-4, "warmup_ratio": 0.05, "weight_decay": 0.1, "aux_coef": 0.01},
+        {"lr": 2e-4, "warmup_ratio": 0.15, "weight_decay": 0.08, "aux_coef": 0.02},
     ]
 
     trials = []
@@ -195,8 +217,7 @@ def generate_trials(n):
         for hp in train_hparams[:5]:  # 前 5 组超参
             trials.append({**arch, **hp})
     for arch in archs[3:]:  # 大架构用保守超参
-        trials.append({**arch, "lr": 3e-4, "warmup_ratio": 0.1,
-                       "weight_decay": 0.1, "aux_coef": 0.01})
+        trials.append({**arch, "lr": 3e-4, "warmup_ratio": 0.1, "weight_decay": 0.1, "aux_coef": 0.01})
 
     if n < len(trials):
         return trials[:n]
@@ -206,6 +227,7 @@ def generate_trials(n):
 # ============================================================
 # 主循环
 # ============================================================
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -220,8 +242,7 @@ def main():
     p.add_argument("--output-dir", type=str, default="search_results")
     p.add_argument("--tokenizer", type=str, default="tokenizer/")
     p.add_argument("--data-dir", type=str, default="data/c4/tokenized")
-    p.add_argument("--max-data-tokens", type=int, default=10_000_000,
-                   help="搜索时最多载入内存的 token 数")
+    p.add_argument("--max-data-tokens", type=int, default=10_000_000, help="搜索时最多载入内存的 token 数")
     p.add_argument("--seed", type=int, default=1234)
     args = p.parse_args()
     if args.max_data_tokens <= 0:
@@ -236,9 +257,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, legacy=False)
     expected_vocab_size = TinyMixtralConfig().vocab_size
     if len(tokenizer) != expected_vocab_size:
-        p.error(
-            f"tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}"
-        )
+        p.error(f"tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -247,10 +266,27 @@ def main():
     print(f"Eval: {tasks} × {args.eval_limit} examples each\n")
 
     csv_path = Path(args.output_dir) / "results.csv"
-    fieldnames = ["trial", "hs", "layers", "experts", "lr", "warmup", "wd", "aux",
-                  "train_loss", "tok_s", "gpu_gb",
-                  "sst2", "mrpc_acc", "mrpc_f1", "qnli", "rte", "cola",
-                  "mean_score", "time_s"]
+    fieldnames = [
+        "trial",
+        "hs",
+        "layers",
+        "experts",
+        "lr",
+        "warmup",
+        "wd",
+        "aux",
+        "train_loss",
+        "tok_s",
+        "gpu_gb",
+        "sst2",
+        "mrpc_acc",
+        "mrpc_f1",
+        "qnli",
+        "rte",
+        "cola",
+        "mean_score",
+        "time_s",
+    ]
 
     with open(csv_path, "w", newline="") as f:
         csv.DictWriter(f, fieldnames).writeheader()
@@ -260,19 +296,29 @@ def main():
 
     for i, hp in enumerate(trials):
         t0 = time.time()
-        print(f"[Trial {i+1}/{len(trials)}] {hp['hidden_size']}d/{hp['num_layers']}L/"
-              f"{hp['num_experts']}E lr={hp['lr']:.0e} wd={hp['weight_decay']} aux={hp['aux_coef']}")
+        print(
+            f"[Trial {i + 1}/{len(trials)}] {hp['hidden_size']}d/{hp['num_layers']}L/"
+            f"{hp['num_experts']}E lr={hp['lr']:.0e} wd={hp['weight_decay']} aux={hp['aux_coef']}"
+        )
 
         # Train
         torch.manual_seed(args.seed + i)
         try:
             model, train_loss, tok_s = train_trial(
-                hp, all_data, tokenizer, args.steps_per_trial,
-                args.batch_size, args.seq_len,
-                hp["lr"], hp["warmup_ratio"], hp["weight_decay"], hp["aux_coef"],
-                args.seed + i)
+                hp,
+                all_data,
+                tokenizer,
+                args.steps_per_trial,
+                args.batch_size,
+                args.seq_len,
+                hp["lr"],
+                hp["warmup_ratio"],
+                hp["weight_decay"],
+                hp["aux_coef"],
+                args.seed + i,
+            )
         except (torch.cuda.OutOfMemoryError, FloatingPointError):
-            print(f"  Failed! Skipping.")
+            print("  Failed! Skipping.")
             torch.cuda.empty_cache()
             continue
 
@@ -287,18 +333,27 @@ def main():
             eval_results, mean_score = {}, 0.0
         else:
             model.eval()
-            eval_results, mean_score = eval_trial(
-                model, tokenizer, tasks, args.eval_limit, args.eval_batch, 256)
-        del model; gc.collect(); torch.cuda.empty_cache()
+            eval_results, mean_score = eval_trial(model, tokenizer, tasks, args.eval_limit, args.eval_batch, 256)
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
 
         elapsed = time.time() - t0
 
         row = {
-            "trial": i, "hs": hp["hidden_size"], "layers": hp["num_layers"],
-            "experts": hp["num_experts"], "lr": hp["lr"], "warmup": hp["warmup_ratio"],
-            "wd": hp["weight_decay"], "aux": hp["aux_coef"],
-            "train_loss": round(train_loss, 4), "tok_s": round(tok_s, 0),
-            "gpu_gb": round(peak_gb, 1), "mean_score": mean_score, "time_s": round(elapsed, 1),
+            "trial": i,
+            "hs": hp["hidden_size"],
+            "layers": hp["num_layers"],
+            "experts": hp["num_experts"],
+            "lr": hp["lr"],
+            "warmup": hp["warmup_ratio"],
+            "wd": hp["weight_decay"],
+            "aux": hp["aux_coef"],
+            "train_loss": round(train_loss, 4),
+            "tok_s": round(tok_s, 0),
+            "gpu_gb": round(peak_gb, 1),
+            "mean_score": mean_score,
+            "time_s": round(elapsed, 1),
         }
         for t, r in eval_results.items():
             for k, v in r.items():
@@ -310,7 +365,8 @@ def main():
             elif "f1" in r:
                 row[t] = r["f1"]
 
-        print(f"  Eval: mean={mean_score:.4f} | { {t: eval_results[t].get('accuracy', eval_results[t].get('matthews_correlation','?')) for t in eval_results} }")
+        scores = {t: eval_results[t].get("accuracy", eval_results[t].get("matthews_correlation", "?")) for t in eval_results}
+        print(f"  Eval: mean={mean_score:.4f} | {scores}")
         print(f"  Time: {elapsed:.0f}s")
 
         with open(csv_path, "a", newline="") as f:
@@ -320,11 +376,11 @@ def main():
         if selection_score > best_score:
             best_score = selection_score
             best_trial = {**hp, "mean_score": mean_score, "train_loss": row["train_loss"]}
-            print(f"  ★ NEW BEST!")
+            print("  ★ NEW BEST!")
 
         print()
 
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     if args.skip_eval:
         print(f"Best: train_loss={best_trial['train_loss']:.4f}" if best_trial else "Best: none")
     else:

@@ -13,18 +13,18 @@
 
 import argparse
 import shutil
-import sys
 from pathlib import Path
 
 
 def main():
-    p = argparse.ArgumentParser(
-        description="Interleave tokenized shards from multiple datasets"
-    )
+    p = argparse.ArgumentParser(description="Interleave tokenized shards from multiple datasets")
     p.add_argument("sources", nargs="+", help="源 tokenized 目录列表")
     p.add_argument("--output", required=True, help="输出目录")
     p.add_argument(
-        "--weights", type=int, nargs="+", default=None,
+        "--weights",
+        type=int,
+        nargs="+",
+        default=None,
         help="每个源目录的权重（默认等权），如 --weights 4 1 表示 80/20",
     )
     p.add_argument("--symlink", action="store_true", help="使用符号链接而非复制")
@@ -32,7 +32,7 @@ def main():
 
     if args.weights and len(args.weights) != len(args.sources):
         p.error(f"--weights 数量 ({len(args.weights)}) 必须与源目录数量 ({len(args.sources)}) 一致")
-    for w in (args.weights or []):
+    for w in args.weights or []:
         if w <= 0:
             p.error("权重必须为正整数")
 
@@ -61,9 +61,7 @@ def main():
 
     idx = 0
     pointers = [0] * len(shard_groups)
-    copy_fn = shutil.copy if not args.symlink else lambda src, dst: dst.symlink_to(
-        src.resolve()
-    ) or None
+    copy_fn = shutil.copy if not args.symlink else lambda src, dst: dst.symlink_to(src.resolve()) or None
 
     while any(p < len(g) for p, g in zip(pointers, shard_groups)):
         for i, (files, weight) in enumerate(zip(shard_groups, weights)):
