@@ -335,6 +335,21 @@ def test_corrector_preserves_probability_mass_padding_and_gradients():
         assert torch.isfinite(parameter.grad).all()
 
 
+def test_compile_gating_respects_chunk_budget():
+    from model.cpt_router import _MAX_COMPILED_CHUNKS
+
+    router = CPTRouter(tiny_config(cpt_state_chunk_size=32), layer_index=0)
+    assert router._should_compile(_MAX_COMPILED_CHUNKS * 32)
+    assert not router._should_compile(_MAX_COMPILED_CHUNKS * 32 + 1)
+
+
+def test_cpu_forward_never_compiles():
+    router = CPTRouter(tiny_config(cpt_state_chunk_size=4), layer_index=0)
+    router.train()
+    router(torch.randn(2, 9, router.hidden_size))
+    assert router._compiled_forward_impl is None
+
+
 @pytest.mark.parametrize("scale", [0.0, 1e-12, 1.0, 1e6])
 def test_router_is_finite_for_zero_near_zero_and_extreme_inputs(scale):
     torch.manual_seed(9)
