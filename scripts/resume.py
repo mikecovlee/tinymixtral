@@ -11,7 +11,132 @@ from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
     BF16AdamW, check_checkpoint_disk_space, final_save, make_adamw,
     make_cosine_schedule, make_wsd_schedule, training_loop,
+    validate_cpt_optimizer_state, validate_serialized_cpt_optimizer_state,
 )
+
+
+_CPT_TRAINING_STATE_FIELDS = frozenset(
+    {
+        "cpt_state_version",
+        "cpt_optimizer_state_presence",
+        "cpt_optimizer_parameter_bindings",
+        "cpt_optimizer_state_dtype",
+    }
+)
+
+
+def validate_cpt_resume_state(state, model, optimizer):
+    """Bind training_state.pt to the Native model's persistent CPT state."""
+    if not isinstance(state, dict):
+        raise RuntimeError("training_state.pt must contain a dictionary")
+    unknown_cpt_fields = sorted(
+        key
+        for key in state
+        if isinstance(key, str)
+        and key.startswith("cpt_")
+        and key not in _CPT_TRAINING_STATE_FIELDS
+    )
+    if unknown_cpt_fields:
+        raise RuntimeError(
+            "training_state.pt contains unknown CPT fields: "
+            + ", ".join(unknown_cpt_fields)
+        )
+    required_resume_fields = {
+        "opt",
+        "sched",
+        "cpt_state_version",
+        "cpt_optimizer_state_presence",
+        "cpt_optimizer_parameter_bindings",
+        "cpt_optimizer_state_dtype",
+    }
+    missing_resume_fields = sorted(required_resume_fields - state.keys())
+    if missing_resume_fields:
+        raise RuntimeError(
+            "legacy or incomplete training checkpoint is incompatible with CPT v1.3; "
+            "missing: " + ", ".join(missing_resume_fields)
+        )
+    saved_version = state["cpt_state_version"]
+    if (
+        isinstance(saved_version, bool)
+        or not isinstance(saved_version, int)
+        or saved_version < 0
+    ):
+        raise RuntimeError("training checkpoint cpt_state_version is invalid")
+    model_version = model.get_cpt_state_version()
+    if saved_version != model_version:
+        raise RuntimeError(
+            "training_state.pt cpt_state_version disagrees with the model checkpoint"
+        )
+    presence = state["cpt_optimizer_state_presence"]
+    if not isinstance(presence, (list, tuple)) or any(
+        not isinstance(name, str) for name in presence
+    ):
+        raise RuntimeError(
+            "training checkpoint cpt_optimizer_state_presence is invalid"
+        )
+    if len(set(presence)) != len(presence):
+        raise RuntimeError(
+            "training checkpoint cpt_optimizer_state_presence is invalid"
+        )
+    validate_serialized_cpt_optimizer_state(
+        model,
+        optimizer,
+        state["opt"],
+        expected_presence=presence,
+        expected_parameter_bindings=state[
+            "cpt_optimizer_parameter_bindings"
+        ],
+        expected_state_dtype=state["cpt_optimizer_state_dtype"],
+    )
+    return saved_version
+
+
+def restore_cpt_optimizer_state(
+    state,
+    model,
+    optimizer,
+    *,
+    lr,
+    weight_decay,
+    bf16_states,
+):
+    """Validate and restore grouped or legacy single-group CPT AdamW state."""
+    expected_optimizer_type = (
+        BF16AdamW if bf16_states else torch.optim.AdamW
+    )
+    if type(optimizer) is not expected_optimizer_type:
+        raise TypeError(
+            "live optimizer type disagrees with the requested BF16 state policy"
+        )
+    serialized_optimizer = state.get("opt") if isinstance(state, dict) else None
+    serialized_groups = (
+        serialized_optimizer.get("param_groups")
+        if isinstance(serialized_optimizer, dict)
+        else None
+    )
+    legacy_single_group = (
+        isinstance(serialized_groups, list)
+        and len(serialized_groups) == 1
+        and len(optimizer.param_groups) != 1
+    )
+    restored_optimizer = optimizer
+    if legacy_single_group:
+        restored_optimizer = expected_optimizer_type(
+            model.parameters(),
+            lr=lr,
+            weight_decay=weight_decay,
+            betas=(0.9, 0.95),
+        )
+
+    validate_cpt_resume_state(state, model, restored_optimizer)
+    restored_optimizer.load_state_dict(state["opt"])
+    validate_cpt_optimizer_state(
+        model,
+        restored_optimizer,
+        expected_presence=state["cpt_optimizer_state_presence"],
+        expected_state_dtype=state["cpt_optimizer_state_dtype"],
+    )
+    return restored_optimizer, legacy_single_group
 
 
 def main():
@@ -76,29 +201,29 @@ def main():
     bs, seq = args.batch_size, args.seq_len
     chunk = (seq + 1) * bs
 
-    opt = make_adamw(model, lr=args.lr, weight_decay=args.wd, bf16_states=args.bf16_optim)
+    opt = make_adamw(
+        model, lr=args.lr, weight_decay=args.wd,
+        bf16_states=args.bf16_optim,
+    )
 
     state_path = latest / "training_state.pt"
     total_tok = step_done * bs * seq
     if state_path.exists():
         state = torch.load(state_path, map_location="cpu", weights_only=True)
-        if "opt" in state:
-            try:
-                opt.load_state_dict(state["opt"])
-            except ValueError:
-                if len(state["opt"].get("param_groups", [])) != 1:
-                    raise
-                print("Loading legacy single-group AdamW state", flush=True)
-                cls = BF16AdamW if args.bf16_optim else torch.optim.AdamW
-                opt = cls(
-                    model.parameters(), lr=args.lr, weight_decay=args.wd,
-                    betas=(0.9, 0.95),
-                )
-                opt.load_state_dict(state["opt"])
+        opt, legacy_single_group = restore_cpt_optimizer_state(
+            state,
+            model,
+            opt,
+            lr=args.lr,
+            weight_decay=args.wd,
+            bf16_states=args.bf16_optim,
+        )
+        if legacy_single_group:
+            print("Loading legacy single-group AdamW state", flush=True)
         if "step" in state:
             step_done = state["step"]
         total_tok = state.get("total_tok", total_tok)
-        print(f"Loaded optimizer+scheduler state", flush=True)
+        print("Loaded optimizer+scheduler state", flush=True)
 
         saved_bs = state.get("batch_size")
         saved_seq = state.get("seq_len")
@@ -150,8 +275,7 @@ def main():
         sched = make_schedule(opt, warmup, total_steps)
         for pg, lr in zip(opt.param_groups, saved_lrs):
             pg["lr"] = lr
-        if "sched" in state:
-            sched.load_state_dict(state["sched"])
+        sched.load_state_dict(state["sched"])
 
     # ---- 计算 shard+ptr ----
     files = sorted(glob.glob(f"{args.cache_dir}/train_*.pt"))
