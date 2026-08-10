@@ -274,19 +274,50 @@ cpt-jitter:
 2. **es=2.0 打破退化**:b_cos 0.645(行真正分化)、π 熵 0.899(路由果断)、负载出现健康差异(专家 3 降至 0.12、专家 5 升至 0.20)、**拥塞价格首次被激活**(专家 0 价格升至 ~0.10 后随负载再平衡回落)——定价机制在分化路由下正常工作。
 3. **悖论深化:loss 全程平(~4.16–4.18)**:即使路由健康分化,LM loss 也不改善——**小规模下 LM loss 对专家专门化不敏感**,与 7.6 的"隐式集成"解释一致。路由质量的改善能否兑现为下游收益,需全规模端到端验证。
 
-### 7.8 后续方向
+### 7.8 正式训练候选配置探查(4 变体,2000 步)
 
-1. **定位真实实验 checkpoint 后零成本体检**:直接测 B 行余弦/专家对多样性,确认 7.5 结论在全规模成立。
-2. **修复落地**:初始化尺度是最直接的修复(建议 `cpt_energy_init_scale` 提高到 ~2.0·τ_e 量级);更稳健的长期方向是补主动分化机制(显式分化压力/探索项),而非只靠初始化。其余候选(更低 τ_e、原型-专家指派)待测。
-3. **关键待验证问题**:修复路由分化后,LM loss 不敏感但**下游任务是否受益**——需以 es=2.0 配置重跑端到端(GLUE/ARC),这是决定 CPT 框架在此规模价值的裁决实验。
+**目的**:为正式训练选择最优配置,而非复现历史。探查 4 组候选(cpt-full 完整机制),判据以最终训练效果为导向——路由健康(已证明是下游成败的因果预测因子)为主,LM loss 与稳定性为辅。
 
-**边界**:小规模(hidden 256、100M token)、每变体单次运行;路由结构指标(init/final b_cos)单调且幅度大,结论稳健;loss 差异在噪声范围内,不作为主要判据。
+**变体与结果**(2000 步 ≈ 49M token,同数据同预算):
 
-### 7.9 实验复现(配置/命令/数据)
+| 变体 | 末段 loss | b_cos@500→末 | π 熵 | 专家对多样性 | 主导对占比 | 价格峰值 |
+|---|---|---|---|---|---|---|
+| v1 es=2.0 / τ=1.0 | 4.534 | 0.612→0.632 | 0.908 | 0.87 | 0.33 | 0.99 |
+| **v2 es=2.0 / τ=0.6** | 4.536 | 0.441→0.472 | **0.865** | 0.87 | 0.32 | 1.32 |
+| v3 es=3.0 / τ=1.0 | 4.543 | 0.476→0.505 | 0.880 | 0.93 | 0.33 | 1.85 |
+| v4 es=2.0 / cap=1.0 | 4.552 | 0.616→0.642 | 0.910 | **1.00** | 0.31 | 1.60 |
+
+**loss 轨迹**:四变体几乎重合(0→4.53±0.01),再次确认小规模 LM loss 不区分路由配置。
+
+**判读**:
+1. **四变体全部健康分化**(b_cos 0.47–0.64,远低于退化阈值 0.96;价格全部激活、负载分化)→ 修复根因在完整机制下成立,各锐度组合均可用。
+2. **v2(τ=0.6)分化最充分**:b_cos 0.472 最低、π 熵 0.865 最果断,价格峰值 1.32 适中 → **首选**。
+3. **v3(es=3.0)**:b_cos@500 0.476 但末段回升至 0.505,略近饱和(softmax 梯度渐弱),无增益 → 排除。
+4. **v4(cap=1.0)**:专家对多样性满分(1.00),负载利用最均衡 → **备选**(若更看重专家利用均衡度)。
+5. loss 全平,v2/v4 的机制优势未在 loss 体现(同既往"隐式集成"悖论)。
+
+**正式训练推荐配置**(下一步执行):
+- **首选**:v2 = `cpt_energy_init_scale=2.0` + `cpt_expert_temperature=0.6`
+- **备选**:v4 = v2 基础上改 `cpt_capacity_factor=1.0`
+- 其余按 7.9 的 v1.1 对齐基础配方:LR 7e-4 cosine、batch 24、wd 0.1、4B pretrain + 1B post-train、`cpt_state_chunk_size=128`、`cpt_state_corrector=True`、proj_dim=128、K=2N。
+
+**探查遗留的未解问题**(需后续实验确认):
+- 路由分化能否兑现为**下游收益**(LM loss 不敏感,GLUE/ARC 是裁决点)——正式训练跑完即知。
+- 是否需补**主动分化机制**(显式分化压力/探索项),而非只靠初始化——若正式训练分化仍不足再考虑。
+
+### 7.9 后续方向
+
+1. **正式训练(裁决实验)**:按上述推荐配置(首选 v2,备选 v4)重跑 v1.1 对齐的端到端(GLUE/ARC)。这是决定 CPT 框架在此规模价值的裁决点。
+2. **定位真实实验 checkpoint 后零成本体检**:直接测 B 行余弦/专家对多样性,确认根因结论在全规模成立。
+3. **稳健化路由分化**:若正式训练分化不足,补主动分化机制(显式分化压力/探索项),而非只靠初始化。其余候选(原型-专家指派)待测。
+
+**边界**:小规模(hidden 256、49M token)、每变体单次运行;路由结构指标(init/final b_cos)单调且幅度大,结论稳健;loss 差异在噪声范围内,不作为主要判据。
+
+### 7.10 实验复现(配置/命令/数据)
 
 **实验脚本**(随本仓库提交,位于 `exp/`):
 - `exp/diag/diag_price_dynamics.py` / `exp/diag/diag_price_biased.py`:第一级价格动力学隔离测试
-- `exp/diag/diag_small_train.py`:第二级四变体训练对照 + 初始化消融(支持 `--energy-init-scale`)
+- `exp/diag/diag_small_train.py`:第二级四变体训练对照 + 初始化消融(支持 `--energy-init-scale` / `--expert-temperature` / `--capacity-factor`)
 - `exp/diag/check_init.py`:验证不同 `energy_init_scale` 下的初始 B 行余弦
 - `exp/proto/`:corrector / 注意力上下文原型、数学验证(`cpt_check.py`)、位级参考捕获(`cpt_capture.py`)、CUDA 集成验证(`cuda_integration.py`)
 - `exp/bench/`:router 基准(`final_bench.py`、`gate_bench.py`)
@@ -309,7 +340,15 @@ python exp/diag/diag_small_train.py --steps 4069 --variants cpt-jitter
 python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 0.5
 python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 1.0
 python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 2.0
+
+# 正式训练候选探查(7.8 节,cpt-full 完整机制,2000 步)
+python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-init-scale 2.0 --expert-temperature 1.0
+python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-init-scale 2.0 --expert-temperature 0.6
+python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-init-scale 3.0 --expert-temperature 1.0
+python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-init-scale 2.0 --expert-temperature 1.0 --capacity-factor 1.0
 ```
+
+**⚠️ 运行方式**:这些实验**必须前台运行**(如 `timeout 850 python ... > log 2>&1`)。后台方式(setsid/nohup/wrapper 脚本)会偶发被信号杀死(见方法论第 9 条),已多次复现。
 
 **原始数据**:JSONL 轨迹由脚本输出到各脚本所在目录(`exp/diag/small_train_*.jsonl`、`exp/diag/price_dynamics_biased.jsonl`)。
 
@@ -323,3 +362,5 @@ python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-
 6. **编译门控三要素**:模式门控(训练)、预算门控(chunk 数上限)、缓存失效(设备迁移)。
 7. **端到端负结果要追到机制层证据**:LM loss 不异常但下游崩溃时,训练指标无法定位问题——必须看路由结构诊断(B 行相似度、专家对多样性、负载分布)。小规模多变量对照(同数据同预算)能在数小时内把根因从"串行状态"重新定位到"能量矩阵分化失败"。
 8. **隔离测试要先确认机制被触发**:价格动力学测试首跑因初始化过于平衡而完全空转(price 恒 0)——验证反馈机制前,先注入失衡,否则测了个寂寞。
+9. **后台运行 GPU 训练会偶发被信号杀**:本机 setsid/nohup/wrapper 后台方式启动的训练进程会在运行 ~1-2 分钟后收到信号静默退出(无 traceback、无 OOM 记录);前台 `timeout 850 python ... > log 2>&1` 方式 100% 可靠。诊断脚本务必前台跑。
+10. **候选配置探查以最终训练效果为目标,而非与历史对比**:选择判据用"预测正式训练质量的信号"(路由健康是下游成败的因果预测因子),而非"复现历史退化";探查覆盖候选空间内未验证的组合(如完整机制 + 修复、负载均衡杠杆),避免拿全量 token 去赌未知交互。

@@ -43,7 +43,7 @@ import os  # noqa: E402
 LOG_EVERY = int(os.environ.get("LOG_EVERY", LOG_EVERY))
 
 
-def make_config(energy_init_scale=None):
+def make_config(energy_init_scale=None, expert_temperature=None, capacity_factor=None):
     kwargs = dict(
         vocab_size=32000,
         hidden_size=256,
@@ -61,6 +61,10 @@ def make_config(energy_init_scale=None):
     )
     if energy_init_scale is not None:
         kwargs["cpt_energy_init_scale"] = energy_init_scale
+    if expert_temperature is not None:
+        kwargs["cpt_expert_temperature"] = expert_temperature
+    if capacity_factor is not None:
+        kwargs["cpt_capacity_factor"] = capacity_factor
     return TinyMixtralConfig(**kwargs)
 
 
@@ -133,13 +137,13 @@ class JitteredCPTRouter(CPTRouter):
         return super()._route_chunk(z_chunk, valid_chunk, state_old, nu_old, rho)
 
 
-def build_model(variant, energy_init_scale=None):
+def build_model(variant, energy_init_scale=None, expert_temperature=None, capacity_factor=None):
     torch.manual_seed(0)
     if variant == "legacy":
         original = mm.SparseMoE
         mm.SparseMoE = LegacySparseMoE
         try:
-            model = TinyMixtralForCausalLM(make_config(energy_init_scale))
+            model = TinyMixtralForCausalLM(make_config(energy_init_scale, expert_temperature, capacity_factor))
         finally:
             mm.SparseMoE = original
     else:
@@ -147,11 +151,11 @@ def build_model(variant, energy_init_scale=None):
             original = mm.CPTRouter
             mm.CPTRouter = JitteredCPTRouter
             try:
-                model = TinyMixtralForCausalLM(make_config(energy_init_scale))
+                model = TinyMixtralForCausalLM(make_config(energy_init_scale, expert_temperature, capacity_factor))
             finally:
                 mm.CPTRouter = original
         else:
-            model = TinyMixtralForCausalLM(make_config(energy_init_scale))
+            model = TinyMixtralForCausalLM(make_config(energy_init_scale, expert_temperature, capacity_factor))
         if variant in ("cpt-static", "cpt-jitter"):
             for layer in model.layers:
                 layer.moe.cpt_router.beta_max = 0.0
@@ -196,8 +200,8 @@ def routing_stats(model):
     return stats
 
 
-def train_variant(variant, steps, energy_init_scale=None):
-    model = build_model(variant, energy_init_scale)
+def train_variant(variant, steps, energy_init_scale=None, expert_temperature=None, capacity_factor=None):
+    model = build_model(variant, energy_init_scale, expert_temperature, capacity_factor)
     model.train()
     hooks = []
     if variant != "legacy":
@@ -272,9 +276,14 @@ def train_variant(variant, steps, energy_init_scale=None):
         final_loss_avg=sum(losses_tail) / len(losses_tail),
         total_s=time.perf_counter() - t0,
     )
-    out_path = OUT_DIR / (
-        f"small_train_{variant}" + (f"_es{energy_init_scale}" if energy_init_scale is not None else "") + ".jsonl"
-    )
+    suffix = f"_{variant}"
+    if energy_init_scale is not None:
+        suffix += f"_es{energy_init_scale}"
+    if expert_temperature is not None:
+        suffix += f"_et{expert_temperature}"
+    if capacity_factor is not None:
+        suffix += f"_cap{capacity_factor}"
+    out_path = OUT_DIR / f"small_train{suffix}.jsonl"
     with open(out_path, "w") as f:
         for rec in records:
             f.write(json.dumps(rec) + "\n")
@@ -293,10 +302,18 @@ def main():
         default=["legacy", "cpt-static", "cpt-full", "cpt-jitter"],
     )
     p.add_argument("--energy-init-scale", type=float, default=None)
+    p.add_argument("--expert-temperature", type=float, default=None)
+    p.add_argument("--capacity-factor", type=float, default=None)
     args = p.parse_args()
     summaries = []
     for variant in args.variants:
-        summary, _ = train_variant(variant, args.steps, energy_init_scale=args.energy_init_scale)
+        summary, _ = train_variant(
+            variant,
+            args.steps,
+            energy_init_scale=args.energy_init_scale,
+            expert_temperature=args.expert_temperature,
+            capacity_factor=args.capacity_factor,
+        )
         summaries.append(summary)
     print("\n=== summary (avg last-100 loss) ===")
     for s in summaries:
