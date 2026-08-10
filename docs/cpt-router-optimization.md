@@ -6,16 +6,16 @@
 
 ## 一、起点:瓶颈定位
 
-blockwise 路由的 chunk 循环是 Python 串行循环,每 chunk 约 20 个 kernel launch,CPU 发射延迟主导(非 FLOPs):
+起点是 **strict v1**:逐 token 串行路由,每 token 一次状态更新,seq=2048 时单层 router 耗时 **2493 ms**——完全不可用于训练。blockwise 分块(chunk 内并行路由、chunk 间串行状态更新)是第一轮缓解,但 chunk 循环仍是 Python 串行循环,每 chunk 约 20 个 kernel launch,CPU 发射延迟主导(非 FLOPs):
 
 | 方案 | 耗时 |
 |---|---|
 | main 的 Linear gate | 0.17 ms |
-| CPT chunk=1(严格 v1) | 2493 ms |
-| CPT chunk=32(当时默认) | **82.8 ms** |
-| CPT chunk=128 | 20.5 ms |
+| **strict v1(chunk=1,起点)** | **2493 ms** |
+| blockwise chunk=32(分块缓解后) | 82.8 ms |
+| blockwise chunk=128 | 20.5 ms |
 
-耗时与 chunk 数成正比——优化方向就是减少循环迭代数、压缩每迭代的开销。
+耗时与 chunk 数成正比——后续优化方向就是减少循环迭代数、压缩每迭代的开销。
 
 ## 二、优化一:数学等价重构(~1.2×)
 
@@ -72,12 +72,13 @@ blockwise 路由的 chunk 循环是 Python 串行循环,每 chunk 约 20 个 ker
 
 | 方案 | 耗时 | vs strict v1 误差 |
 |---|---|---|
-| 起点(chunk=32) | 82.8 ms | 8.2e-6 |
-| 重构 + compile(chunk=32) | 11.4 ms | 8.2e-6 |
-| corrector + compile(chunk=32) | 21.7 ms | 1.5e-6 |
-| **corrector + compile(chunk=128)** | **5.9 ms** | **1.5e-6** |
+| **strict v1(chunk=1,起点)** | **2493 ms** | 0(参照) |
+| blockwise(chunk=32) | 82.8 ms | 8.2e-6 |
+| blockwise + 重构 + compile(chunk=32) | 11.4 ms | 8.2e-6 |
+| + corrector(chunk=32) | 21.7 ms | 1.5e-6 |
+| **+ corrector(chunk=128)** | **5.9 ms** | **1.5e-6** |
 
-**14× 提速 + ~5.5× 精度提升**。部署建议:`cpt_state_chunk_size=128` + `cpt_state_corrector=True`(默认)。
+**相对 strict v1 约 420× 提速,且精度优于无校正的 blockwise(~5.5×)**。部署建议:`cpt_state_chunk_size=128` + `cpt_state_corrector=True`(默认)。
 
 ## 六、方向 C 探索:复用注意力上下文(否决)
 
@@ -99,7 +100,7 @@ blockwise 路由的 chunk 循环是 Python 串行循环,每 chunk 约 20 个 ker
 
 **结论:corrector 在精度和速度两个轴上全面支配,方向 C 否决。**
 
-**机制解释**:strict v1 的状态是**梯度下降轨迹**;corrector 是它的一阶泰勒展开,结构忠实。注意力上下文是"按与当前 token 的相似度加权的历史平均"——与梯度轨迹是**不同的对象**,不構成逼近,误差随 γ 线性恶化。
+**机制解释**:strict v1 的状态是**梯度下降轨迹**;corrector 是它的一阶泰勒展开,结构忠实。注意力上下文是"按与当前 token 的相似度加权的历史平均"——与梯度轨迹是**不同的对象**,不构成逼近,误差随 γ 线性恶化。
 
 **自校验方法**:否定性结论必须先排除实现 bug——γ=0 必须退化回 corrector(实测残差 4e-7,来自二阶差异),确认退化成立后,γ>0 的恶化才是真实的机制性结论。
 
