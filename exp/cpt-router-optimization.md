@@ -307,7 +307,7 @@ cpt-jitter:
 
 ### 7.9 后续方向
 
-1. **正式训练(裁决实验)**:按上述推荐配置(首选 v2,备选 v4)重跑 v1.1 对齐的端到端(GLUE/ARC)。这是决定 CPT 框架在此规模价值的裁决点。
+1. **正式训练(裁决实验)**:按上述推荐配置(首选 v2,备选 conservative/balanced)重跑 v1.1 对齐的端到端(GLUE/ARC)。这是决定 CPT 框架在此规模价值的裁决点。
 2. **定位真实实验 checkpoint 后零成本体检**:直接测 B 行余弦/专家对多样性,确认根因结论在全规模成立。
 3. **稳健化路由分化**:若正式训练分化不足,补主动分化机制(显式分化压力/探索项),而非只靠初始化。其余候选(原型-专家指派)待测。
 
@@ -360,11 +360,11 @@ python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-in
 
 **CPT 路由超参**(本轮修复 + 探查选定):
 
-| 超参 | 首选(v2) | 备选 v1(保守) | 备选 v4(均衡) | 说明 |
+| 超参 | 首选(v2) | 备选 conservative | 备选 balanced | 说明 |
 |---|---|---|---|---|
 | `cpt_energy_init_scale` | **2.0** | 2.0 | 2.0 | 打破能量矩阵对称(根因修复,init b_cos 0.617) |
-| `cpt_expert_temperature` | **0.6** | 1.0 | 1.0 | v2 分化最充分(b_cos 0.472);v1/v4 用默认 τ |
-| `cpt_capacity_factor` | 1.25(默认) | 1.25(默认) | **1.0** | v4 专家对多样性满分(1.00) |
+| `cpt_expert_temperature` | **0.6** | 1.0 | 1.0 | v2 分化最充分(b_cos 0.472);conservative/balanced 用默认 τ |
+| `cpt_capacity_factor` | 1.25(默认) | 1.25(默认) | **1.0** | balanced 专家对多样性满分(1.00) |
 | `cpt_state_chunk_size` | **128** | 128 | 128 | 性能 5.9ms/层,corrector 下精度优于 32 |
 | `cpt_state_corrector` | True(默认) | True | True | 完整机制 |
 | `cpt_projection_dim` | 128(默认) | 128 | 128 | |
@@ -398,8 +398,8 @@ python scripts/train.py \
 
 **CPT 超参注入(已完成)**:`scripts/train.py` 已支持 `--config-json <path>`,读取 `TinyMixtralConfig.from_json_file`(缺失字段回退默认值)。配置文件已入库(均与探查结果一致):
 - `configs/model/cpt_v2.json` — **首选 v2**(es=2.0、τ_e=0.6、chunk=128)
-- `configs/model/cpt_v1.json` — **保守备选**(es=2.0、τ_e=1.0、chunk=128)
-- `configs/model/cpt_v4.json` — **均衡备选**(es=2.0、τ_e=1.0、chunk=128、`cpt_capacity_factor=1.0`)
+- `configs/model/cpt_v2_conservative.json` — **保守备选**(es=2.0、τ_e=1.0、chunk=128)
+- `configs/model/cpt_v2_balanced.json` — **均衡备选**(es=2.0、τ_e=1.0、chunk=128、`cpt_capacity_factor=1.0`)
 
 不传 `--config-json` 则用 `TinyMixtralConfig()` 默认值(即 v1.1 架构 + CPT 默认超参),行为与以前一致。
 
@@ -419,10 +419,10 @@ python scripts/train.py --cache-dir data/posttrain2/knowledge_blend \
 
 ### 8.3 交接清单(接手人需完成)
 
-1. ~~给 train.py 加 config-json 支持~~(**已完成**:`--config-json` 参数 + `configs/model/cpt_v1.json`/`cpt_v2.json`/`cpt_v4.json` 已入库)。
+1. ~~给 train.py 加 config-json 支持~~(**已完成**:`--config-json` 参数 + `configs/model/cpt_v2*.json` 已入库)。
 2. 按 8.1 首选 v2 配置(即 `--config-json configs/model/cpt_v2.json`)跑**预训练**(4B)→ **后训练**(1B)→ **GLUE/ARC 评估**。
 3. 对比 v1.1 基线(last-work.md 记录:GLUE 0.513)。**MRPC 是否恢复 + GLUE mean 是否 ≥0.513 是核心裁决指标。**
-4. 若 v2 分化不足或下游不改善,试备选 v1(保守,`configs/model/cpt_v1.json`)或 v4(均衡,`configs/model/cpt_v4.json`),或按 7.9 补主动分化机制。
+4. 若 v2 分化不足或下游不改善,试备选(`configs/model/cpt_v2_conservative.json` 或 `configs/model/cpt_v2_balanced.json`),或按 7.9 补主动分化机制。
 5. 若 checkpoint 可用,先做零成本体检(测 B 行余弦/专家对多样性)再跑全量,可省一轮。
 
 ## 九、方法论沉淀
