@@ -352,7 +352,76 @@ python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-in
 
 **原始数据**:JSONL 轨迹由脚本输出到各脚本所在目录(`exp/diag/small_train_*.jsonl`、`exp/diag/price_dynamics_biased.jsonl`)。
 
-## 八、方法论沉淀
+## 八、正式训练配置与脚本
+
+本节是**正式训练的执行手册**(经 7.8 节探查定稿)。目标:用修复后的 CPT 配置跑一轮 v1.1 对齐的端到端训练,用 GLUE/ARC 裁决"路由分化是否带来下游收益"。
+
+### 8.1 最终超参(探查定稿)
+
+**CPT 路由超参**(本轮修复 + 探查选定):
+
+| 超参 | 首选(v2) | 备选(v4) | 说明 |
+|---|---|---|---|
+| `cpt_energy_init_scale` | **2.0** | 2.0 | 打破能量矩阵对称(根因修复,init b_cos 0.617) |
+| `cpt_expert_temperature` | **0.6** | 1.0 | v2 分化最充分(b_cos 0.472、π 熵 0.865) |
+| `cpt_capacity_factor` | 1.25(默认) | **1.0** | v4 专家对多样性满分(1.00) |
+| `cpt_state_chunk_size` | **128** | 128 | 性能 5.9ms/层,corrector 下精度优于 32 |
+| `cpt_state_corrector` | True(默认) | True | 完整机制 |
+| `cpt_projection_dim` | 128(默认) | 128 | |
+| `cpt_num_prototypes` | 12(=2N) | 12 | 派生 |
+| 其余(β_max=0.45、ρ=0.95、radius=1.0、price_lr=0.01、eps 系) | 默认 | 默认 | 稳定性已验证 |
+
+**基础训练超参**(与 v1.1 对齐,保证归因干净):
+
+| 项 | 值 |
+|---|---|
+| 架构 | v1.1 规模(默认 config):896d / 10L / 14Q-2KV GQA / head_dim 64 / 6E / top-2 / ~432M |
+| 预训练数据 | FineWeb-Edu 89% + Cosmopedia 11%,**4B tokens** |
+| 优化 | LR 7e-4、cosine、batch 24、seq 1024、wd 0.1 |
+| 后训练 | 1B Wiki+Cosmo 50:50,LR 2e-5(cosine 或 WSD) |
+
+### 8.2 训练脚本与命令
+
+**⚠️ 所有训练必须前台运行**(`timeout` 包裹),后台方式会偶发被信号杀(见方法论第 9 条)。
+
+**① 预训练**(从零开始,4B tokens)——当前入口 `scripts/train.py`:
+```bash
+python scripts/train.py \
+  --cache-dir data/pretrain/smollm_blend \
+  --output-dir checkpoints/cpt_v2 \
+  --batch-size 24 --seq-len 1024 \
+  --lr 7e-4 --wd 0.1 --warmup-steps 2000 \
+  --max-tokens 4000000000 --schedule cosine \
+  --bf16-optim
+```
+
+**⚠️ CPT 超参注入**:`scripts/train.py` 目前用 `TinyMixtralConfig()` 默认值建模型,**不读取 config json**。因此需要先用任意方式让默认 config 带上 8.1 的 CPT 超参,再跑 train.py。推荐做法(二选一,交给接手人):
+- 临时改 `model/config.py` 中对应字段默认值(`cpt_energy_init_scale=2.0`、`cpt_expert_temperature=0.6`、`cpt_state_chunk_size=128`),跑完正式训练后再复原;
+- 或给 `scripts/train.py` 增加 `--config-json <path>` 参数(读 `TinyMixtralConfig.from_json_file`),并在 `configs/` 放一份如 `configs/cpt_v2.json`。**这是交接清单里最需要补的代码改动。**
+
+**② 后训练**(从预训练 checkpoint 续训,1B tokens)——复用 `scripts/resume.py` 或 `scripts/train.py` 加载 checkpoint 后跑(若 resume 需要 LR 覆盖,见 resume.py 参数):
+```bash
+python scripts/train.py --cache-dir data/posttrain2/knowledge_blend \
+  --output-dir checkpoints/cpt_v2_posttrain --batch-size 24 --seq-len 1024 \
+  --lr 2e-5 --wd 0.1 --max-tokens 1000000000 --schedule cosine
+```
+
+**③ 评估(GLUE/ARC,裁决点)**:
+- GLUE:复用 `scripts/eval_glue.py`(zero-shot,7 任务主指标,除 CoLA)
+- ARC:复用 `scripts/eval_arc.py`
+- 或接入 `docs/next-experiments.md` 规划的 lm-evaluation-harness 标准套件
+
+**④ 诊断脚本**(如需复查路由结构):`exp/diag/diag_small_train.py`(前台跑),见 7.10。
+
+### 8.3 交接清单(接手人需完成)
+
+1. **给 train.py 加 config-json 支持**(或临时改 config.py 默认值)——CPT 超参注入的必经步骤。
+2. 按 8.1 首选 v2 配置跑**预训练**(4B)→ **后训练**(1B)→ **GLUE/ARC 评估**。
+3. 对比 v1.1 基线(last-work.md 记录:GLUE 0.513)。**MRPC 是否恢复 + GLUE mean 是否 ≥0.513 是核心裁决指标。**
+4. 若 v2 分化不足或下游不改善,试备选 v4(cap=1.0),或按 7.9 补主动分化机制。
+5. 若 checkpoint 可用,先做零成本体检(测 B 行余弦/专家对多样性)再跑全量,可省一轮。
+
+## 九、方法论沉淀
 
 1. **位级一致是数学等价重构的验收标准**:捕获参考输出 → 重构 → 逐 bit 对比,再谈性能。
 2. **原型先行,量化后集成**:corrector 与注意力上下文都先在 /tmp 独立原型测精度/速度,达标才进仓库;不达标留下量化记录。
