@@ -284,31 +284,34 @@ cpt-jitter:
 
 ### 7.9 实验复现(配置/命令/数据)
 
-**诊断脚本**(本会话临时脚本,位于 `/tmp/opencode/`):
-- `diag_price_dynamics.py` / `diag_price_biased.py`:第一级价格动力学隔离测试
-- `diag_small_train.py`:第二级四变体训练对照 + 初始化消融(支持 `--energy-init-scale`)
+**实验脚本**(随本仓库提交,位于 `exp/`):
+- `exp/diag/diag_price_dynamics.py` / `exp/diag/diag_price_biased.py`:第一级价格动力学隔离测试
+- `exp/diag/diag_small_train.py`:第二级四变体训练对照 + 初始化消融(支持 `--energy-init-scale`)
+- `exp/diag/check_init.py`:验证不同 `energy_init_scale` 下的初始 B 行余弦
+- `exp/proto/`:corrector / 注意力上下文原型、数学验证(`cpt_check.py`)、位级参考捕获(`cpt_capture.py`)、CUDA 集成验证(`cuda_integration.py`)
+- `exp/bench/`:router 基准(`final_bench.py`、`gate_bench.py`)
 
 **数据**:`data/pretrain/smollm_blend/train_0000.pt`(int64,1 亿 token/个,v1.1 同源 FineWeb-Edu+Cosmo 混合)。每变体恰好消费 1 个 shard。
 
-**第二级模型配置**(`make_config()`):vocab 32000 / hidden 256 / 4 层 / 8Q-2KV GQA / head_dim 32 / 6 专家 / top-2 / expert_intermediate 683 / `cpt_projection_dim=64` / `cpt_state_chunk_size=32` / `cpt_init_seed=0`。
+**第二级模型配置**(`make_config()`,见 `exp/diag/diag_small_train.py`):vocab 32000 / hidden 256 / 4 层 / 8Q-2KV GQA / head_dim 32 / 6 专家 / top-2 / expert_intermediate 683 / `cpt_projection_dim=64` / `cpt_state_chunk_size=32` / `cpt_init_seed=0`。
 
 **训练超参**:b=24、seq=1024、4069 步(≈100M token)、LR 7e-4 cosine、warmup 200、AdamW wd 0.1、bf16 autocast、梯度裁剪 1.0。CPT 变体每步 `commit_cpt_transaction`;legacy 变体在脚本内实现 v1.1 风格 Linear gate + jitter(0.01)+ aux loss(0.01),跳过事务链。日志:每 10 步 loss/grad_norm/显存,每 250 步路由结构(B 行余弦、π 熵、专家对多样性、负载)。
 
-**复现命令**(在仓库根目录,用 tinymixtral conda 环境):
+**复现命令**(在仓库根目录,用 tinymixtral conda 环境;脚本输出 JSONL 到自身所在目录):
 ```bash
 # 第二级:四变体
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants legacy
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants cpt-static
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants cpt-full
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants cpt-jitter
+python exp/diag/diag_small_train.py --steps 4069 --variants legacy
+python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static
+python exp/diag/diag_small_train.py --steps 4069 --variants cpt-full
+python exp/diag/diag_small_train.py --steps 4069 --variants cpt-jitter
 
 # 初始化消融(cpt-static 基座)
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 0.5
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 1.0
-python /tmp/opencode/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 2.0
+python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 0.5
+python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 1.0
+python exp/diag/diag_small_train.py --steps 4069 --variants cpt-static --energy-init-scale 2.0
 ```
 
-**原始数据**:JSONL 轨迹存于 `/tmp/opencode/small_train_*.jsonl` 与 `/tmp/opencode/price_dynamics_biased.jsonl`(若需留存可迁入仓库)。
+**原始数据**:JSONL 轨迹由脚本输出到各脚本所在目录(`exp/diag/small_train_*.jsonl`、`exp/diag/price_dynamics_biased.jsonl`)。
 
 ## 八、方法论沉淀
 
