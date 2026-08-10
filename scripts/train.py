@@ -29,6 +29,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--cache-dir", default="data/c4/tokenized")
     p.add_argument("--output-dir", default="checkpoints/run")
+    p.add_argument("--config-json", default=None, help="TinyMixtralConfig JSON 文件（覆盖默认超参，缺省用默认）")
     p.add_argument("--batch-size", type=int, default=22)
     p.add_argument("--seq-len", type=int, default=1024)
     target = p.add_mutually_exclusive_group()
@@ -53,6 +54,9 @@ def main():
     if args.keep_last_checkpoints <= 0:
         p.error("keep-last-checkpoints must be positive")
     cfg = TinyMixtralConfig()
+    if args.config_json is not None:
+        cfg = TinyMixtralConfig.from_json_file(args.config_json)
+        print(f"Loaded config from {args.config_json}", flush=True)
     if args.seq_len > cfg.max_position_embeddings:
         p.error(f"seq-len {args.seq_len} exceeds model limit {cfg.max_position_embeddings}")
 

@@ -384,20 +384,23 @@ python exp/diag/diag_small_train.py --steps 2000 --variants cpt-full --energy-in
 
 **⚠️ 所有训练必须前台运行**(`timeout` 包裹),后台方式会偶发被信号杀(见方法论第 9 条)。
 
-**① 预训练**(从零开始,4B tokens)——当前入口 `scripts/train.py`:
+**① 预训练**(从零开始,4B tokens)——入口 `scripts/train.py`(已支持 `--config-json`):
 ```bash
 python scripts/train.py \
   --cache-dir data/pretrain/smollm_blend \
   --output-dir checkpoints/cpt_v2 \
+  --config-json configs/model/cpt_v2.json \
   --batch-size 24 --seq-len 1024 \
   --lr 7e-4 --wd 0.1 --warmup-steps 2000 \
   --max-tokens 4000000000 --schedule cosine \
   --bf16-optim
 ```
 
-**⚠️ CPT 超参注入**:`scripts/train.py` 目前用 `TinyMixtralConfig()` 默认值建模型,**不读取 config json**。因此需要先用任意方式让默认 config 带上 8.1 的 CPT 超参,再跑 train.py。推荐做法(二选一,交给接手人):
-- 临时改 `model/config.py` 中对应字段默认值(`cpt_energy_init_scale=2.0`、`cpt_expert_temperature=0.6`、`cpt_state_chunk_size=128`),跑完正式训练后再复原;
-- 或给 `scripts/train.py` 增加 `--config-json <path>` 参数(读 `TinyMixtralConfig.from_json_file`),并在 `configs/` 放一份如 `configs/cpt_v2.json`。**这是交接清单里最需要补的代码改动。**
+**CPT 超参注入(已完成)**:`scripts/train.py` 已支持 `--config-json <path>`,读取 `TinyMixtralConfig.from_json_file`(缺失字段回退默认值)。配置文件已入库:
+- `configs/model/cpt_v2.json` — 首选 v2(es=2.0、τ_e=0.6、chunk=128)
+- `configs/model/cpt_v4.json` — 备选 v4(在 v2 基础上加 `cpt_capacity_factor=1.0`)
+
+不传 `--config-json` 则用 `TinyMixtralConfig()` 默认值(即 v1.1 架构 + CPT 默认超参),行为与以前一致。
 
 **② 后训练**(从预训练 checkpoint 续训,1B tokens)——复用 `scripts/resume.py` 或 `scripts/train.py` 加载 checkpoint 后跑(若 resume 需要 LR 覆盖,见 resume.py 参数):
 ```bash
@@ -415,10 +418,10 @@ python scripts/train.py --cache-dir data/posttrain2/knowledge_blend \
 
 ### 8.3 交接清单(接手人需完成)
 
-1. **给 train.py 加 config-json 支持**(或临时改 config.py 默认值)——CPT 超参注入的必经步骤。
-2. 按 8.1 首选 v2 配置跑**预训练**(4B)→ **后训练**(1B)→ **GLUE/ARC 评估**。
+1. ~~给 train.py 加 config-json 支持~~(**已完成**:`--config-json` 参数 + `configs/model/cpt_v2.json`/`cpt_v4.json` 已入库)。
+2. 按 8.1 首选 v2 配置(即 `--config-json configs/model/cpt_v2.json`)跑**预训练**(4B)→ **后训练**(1B)→ **GLUE/ARC 评估**。
 3. 对比 v1.1 基线(last-work.md 记录:GLUE 0.513)。**MRPC 是否恢复 + GLUE mean 是否 ≥0.513 是核心裁决指标。**
-4. 若 v2 分化不足或下游不改善,试备选 v4(cap=1.0),或按 7.9 补主动分化机制。
+4. 若 v2 分化不足或下游不改善,试备选 v4(`configs/model/cpt_v4.json`),或按 7.9 补主动分化机制。
 5. 若 checkpoint 可用,先做零成本体检(测 B 行余弦/专家对多样性)再跑全量,可省一轮。
 
 ## 九、方法论沉淀
