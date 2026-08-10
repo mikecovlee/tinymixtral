@@ -26,6 +26,16 @@ from scripts.train_utils import (
 )
 
 
+LEGACY_SHORT_STATE_CONFIG_VALUES = {
+    "cpt_rho_beta": 0.95,
+    "cpt_beta_max": 0.45,
+    "cpt_kappa_beta": 1.0,
+    "cpt_lambda_sa": 0.1,
+    "cpt_state_step_size": 0.05,
+    "cpt_state_radius": 1.0,
+}
+
+
 class TransparentModuleWrapper(torch.nn.Module):
     """Minimal module wrapper that forwards Native CPT APIs transparently."""
 
@@ -418,7 +428,7 @@ def mutation_cases(model):
     algorithm_key = next(
         key for key in cpt_keys if key.endswith(".router_algorithm_version")
     )
-    bad_algorithm[algorithm_key] = torch.tensor(2, dtype=torch.int64)
+    bad_algorithm[algorithm_key] = torch.tensor(4, dtype=torch.int64)
     yield "unsupported CPT algorithm", bad_algorithm
 
     negative_price = OrderedDict(base)
@@ -469,6 +479,33 @@ def mutation_cases(model):
     yield "legacy Linear Router", legacy
 
 
+@pytest.mark.parametrize("strict", [True, False])
+@pytest.mark.parametrize("unsupported_algorithm_version", [1, 2])
+def test_state_dict_rejects_non_v3_router_algorithms_before_copying_weights(
+    unsupported_algorithm_version,
+    strict,
+):
+    source = TinyMixtralForCausalLM(tiny_config())
+    serialized = clone_state_dict(source)
+    algorithm_keys = [
+        key
+        for key in serialized
+        if key.endswith(".router_algorithm_version")
+    ]
+    for key in algorithm_keys:
+        serialized[key] = torch.tensor(
+            unsupported_algorithm_version,
+            dtype=torch.int64,
+        )
+
+    target = TinyMixtralForCausalLM(tiny_config())
+    before = clone_state_dict(target)
+    with pytest.raises(RuntimeError, match="unsupported CPT algorithm"):
+        target.load_state_dict(serialized, strict=strict)
+    for key, value in target.state_dict().items():
+        assert torch.equal(value, before[key])
+
+
 def test_strict_cpt_load_rejects_missing_unknown_malformed_and_legacy_state():
     source = TinyMixtralForCausalLM(tiny_config())
     for message, state in mutation_cases(source):
@@ -502,6 +539,40 @@ def test_load_rejects_mutated_live_config_before_copying_weights():
         target.load_state_dict(source.state_dict(), strict=True)
     for key, value in target.state_dict().items():
         assert torch.equal(value, before[key])
+
+
+@pytest.mark.parametrize("unsupported_router_version", [1, 2, 4])
+def test_from_pretrained_rejects_non_v3_config_before_reading_weights(
+    tmp_path,
+    monkeypatch,
+    unsupported_router_version,
+):
+    model = TinyMixtralForCausalLM(tiny_config())
+    model.save_pretrained(tmp_path)
+    config_path = tmp_path / "config.json"
+    with config_path.open(encoding="utf-8") as config_file:
+        payload = json.load(config_file)
+    payload["cpt_router_version"] = unsupported_router_version
+    with config_path.open("w", encoding="utf-8") as config_file:
+        json.dump(payload, config_file)
+
+    serialized = clone_state_dict(model)
+    weight_reads = []
+
+    def tracked_load(path, *args, **kwargs):
+        weight_reads.append(path)
+        return serialized
+
+    monkeypatch.setattr(torch, "load", tracked_load)
+    rejection = None
+    try:
+        TinyMixtralForCausalLM.from_pretrained(str(tmp_path))
+    except (RuntimeError, ValueError) as error:
+        rejection = error
+
+    assert weight_reads == []
+    assert rejection is not None
+    assert "cpt_router_version=3" in str(rejection)
 
 
 def test_explicit_checkpoint_config_mismatch_is_rejected(tmp_path):
@@ -547,6 +618,45 @@ def test_checkpoint_config_requires_known_complete_cpt_schema(tmp_path, mutation
         json.dump(payload, config_file)
     with pytest.raises(RuntimeError, match=message):
         TinyMixtralForCausalLM.from_pretrained(str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "legacy_field",
+    sorted(LEGACY_SHORT_STATE_CONFIG_VALUES),
+)
+def test_checkpoint_config_rejects_legacy_short_state_field_as_unknown(
+    tmp_path,
+    monkeypatch,
+    legacy_field,
+):
+    model = TinyMixtralForCausalLM(tiny_config())
+    model.save_pretrained(tmp_path)
+    config_path = tmp_path / "config.json"
+    with config_path.open(encoding="utf-8") as config_file:
+        payload = json.load(config_file)
+    for field in LEGACY_SHORT_STATE_CONFIG_VALUES:
+        payload.pop(field, None)
+    payload[legacy_field] = LEGACY_SHORT_STATE_CONFIG_VALUES[legacy_field]
+    with config_path.open("w", encoding="utf-8") as config_file:
+        json.dump(payload, config_file)
+
+    weight_reads = []
+
+    def tracked_load(path, *args, **kwargs):
+        weight_reads.append(path)
+        return clone_state_dict(model)
+
+    monkeypatch.setattr(torch, "load", tracked_load)
+    rejection = None
+    try:
+        TinyMixtralForCausalLM.from_pretrained(str(tmp_path))
+    except RuntimeError as error:
+        rejection = error
+
+    assert weight_reads == []
+    assert rejection is not None
+    assert "unknown CPT fields" in str(rejection)
+    assert legacy_field in str(rejection)
 
 
 @pytest.mark.parametrize(
@@ -619,10 +729,7 @@ def test_checkpoint_config_rejects_non_top2_routing(tmp_path):
     "field",
     [
         "cpt_num_prototypes",
-        "cpt_kappa_beta",
-        "cpt_lambda_sa",
         "cpt_prototype_temperature",
-        "cpt_state_step_size",
         "cpt_energy_init_scale",
         "cpt_price_learning_rate",
     ],

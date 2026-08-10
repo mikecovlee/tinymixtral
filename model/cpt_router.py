@@ -1,17 +1,18 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 
-"""Native CPT-MoE probability Router (strict mathematical version 1).
+"""Native CPT-MoE probability Router (v1.3 long-state-only).
 
-Theory uses column vectors.  For one token ``x_t in R^{d x 1}``:
+Theory uses column vectors.  For one token ``x_mu in R^{d x 1}``:
 
-    z_t = StableL2(P x_t)
-    q_t = softmax(M_{t-1}^T z_t / tau_p)
+    z_mu = StableL2(P x_mu)
+    A_bar = ColNorm(A)
+    q_mu = softmax(A_bar^T z_mu / tau_p)
     B   = row_softmax((Theta_C H_N - 1 lambda^T) / tau_e)
-    pi_t = B^T q_t
+    pi_mu = B^T q_mu
 
 The implementation stores tokens row-major, hence the final equivalent
-operation is ``pi_t.T = q_t.T @ B``.  There is deliberately no softmax
+operation is ``pi_mu.T = q_mu.T @ B``.  There is deliberately no softmax
 after this product.
 """
 
@@ -24,7 +25,7 @@ import torch.nn.functional as F
 from .config import CPT_ROUTING_ARCHITECTURE_FIELDS, TinyMixtralConfig
 
 
-CPT_ROUTER_ALGORITHM_VERSION = 1
+CPT_ROUTER_ALGORITHM_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -54,13 +55,12 @@ class CPTRouterOutput:
 
 
 class CPTRouter(nn.Module):
-    """CPT v1 Router for a single MoE layer.
+    """CPT v1.3 long-state-only Router for a single MoE layer.
 
     ``projection``, ``anchors`` and ``energy`` (the code name for
     ``Theta_C``) are learnable.  The congestion price, optimizer step and
-    Router state version are persistent but never optimized.  Sequence state
-    ``S, nu`` is local to one forward and always starts from zero for every
-    batch row.
+    Router state version are persistent but never optimized.  Routing uses the
+    normalized long-term anchors directly and has no per-sequence state.
     """
 
     def __init__(self, config: TinyMixtralConfig, layer_index: int):
@@ -81,14 +81,8 @@ class CPTRouter(nn.Module):
         self.num_prototypes = config.cpt_num_prototypes
         self.num_experts = config.num_local_experts
 
-        self.rho_beta = config.cpt_rho_beta
-        self.beta_max = config.cpt_beta_max
-        self.kappa_beta = config.cpt_kappa_beta
-        self.lambda_sa = config.cpt_lambda_sa
         self.prototype_temperature = config.cpt_prototype_temperature
         self.expert_temperature = config.cpt_expert_temperature
-        self.state_step_size = config.cpt_state_step_size
-        self.state_radius = config.cpt_state_radius
         self.eps_z = config.cpt_eps_z
         self.eps_m = config.cpt_eps_m
         self.eps_init = config.cpt_eps_init
@@ -269,7 +263,7 @@ class CPTRouter(nn.Module):
         hidden_states: torch.Tensor,
         route_valid_mask: torch.Tensor | None = None,
     ) -> CPTRouterOutput:
-        """Route ``[batch, sequence, hidden]`` states with strict CPT v1."""
+        """Route states using normalized long-term anchors only."""
         if hidden_states.ndim != 3:
             raise ValueError("hidden_states must have shape [batch, sequence, hidden]")
         batch_size, sequence_length, hidden_size = hidden_states.shape
@@ -309,76 +303,18 @@ class CPTRouter(nn.Module):
             projected = F.linear(hidden_fp32, self.projection)
             projected = self._stable_l2(projected, dim=-1, eps=self.eps_z)
             kernel = self.expert_kernel()
-
-            short_state = torch.zeros(
-                batch_size,
-                self.projection_dim,
-                self.num_prototypes,
-                device=hidden_states.device,
-                dtype=torch.float32,
+            normalized_anchors = self._stable_l2(
+                self.anchors,
+                dim=0,
+                eps=self.eps_m,
             )
-            responsibility = torch.zeros(
-                batch_size,
-                self.num_prototypes,
-                device=hidden_states.device,
+            prototype_logits = (
+                projected @ normalized_anchors
+            ) / self.prototype_temperature
+            nominal_prototype_probabilities = F.softmax(
+                prototype_logits,
+                dim=-1,
                 dtype=torch.float32,
-            )
-            prototype_placeholder = torch.zeros(
-                batch_size,
-                self.num_prototypes,
-                device=hidden_states.device,
-                dtype=torch.float32,
-            )
-            prototype_probability_steps: list[torch.Tensor] = []
-
-            for position in range(sequence_length):
-                valid_rows = valid_mask[:, position].unsqueeze(-1)
-                z_t = projected[:, position]
-                state_old = short_state
-                nu_old = responsibility
-
-                beta = self.beta_max * nu_old / (nu_old + self.kappa_beta)
-                mixed = (
-                    self.anchors.unsqueeze(0)
-                    * (1.0 - beta.detach().unsqueeze(1))
-                    + state_old.detach() * beta.detach().unsqueeze(1)
-                )
-                prototypes = self._stable_l2(mixed, dim=1, eps=self.eps_m)
-                prototype_logits = torch.einsum(
-                    "bd,bdk->bk", z_t, prototypes
-                ) / self.prototype_temperature
-                q_t = F.softmax(prototype_logits, dim=-1, dtype=torch.float32)
-                prototype_probability_steps.append(
-                    torch.where(valid_rows, q_t, prototype_placeholder)
-                )
-
-                with torch.no_grad():
-                    q_detached = q_t.detach()
-                    state_gradient = (
-                        (state_old - z_t.detach().unsqueeze(-1))
-                        * q_detached.unsqueeze(1)
-                        + self.lambda_sa
-                        * (state_old - self.anchors.detach().unsqueeze(0))
-                    )
-                    state_candidate = state_old - self.state_step_size * state_gradient
-                    state_norm = torch.linalg.vector_norm(
-                        state_candidate, dim=1, keepdim=True
-                    )
-                    state_candidate = state_candidate / torch.maximum(
-                        torch.ones_like(state_norm),
-                        state_norm / self.state_radius,
-                    )
-                    nu_candidate = self.rho_beta * nu_old + q_detached
-                    short_state = torch.where(
-                        valid_rows.unsqueeze(-1), state_candidate, state_old
-                    )
-                    responsibility = torch.where(
-                        valid_rows, nu_candidate, nu_old
-                    )
-
-            nominal_prototype_probabilities = torch.stack(
-                prototype_probability_steps,
-                dim=1,
             )
             flat_prototype_probabilities = nominal_prototype_probabilities.reshape(
                 -1,

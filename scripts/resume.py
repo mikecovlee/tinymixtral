@@ -52,7 +52,7 @@ def validate_cpt_resume_state(state, model, optimizer):
     missing_resume_fields = sorted(required_resume_fields - state.keys())
     if missing_resume_fields:
         raise RuntimeError(
-            "legacy or incomplete training checkpoint is incompatible with CPT v1; "
+            "legacy or incomplete training checkpoint is incompatible with CPT v1.3; "
             "missing: " + ", ".join(missing_resume_fields)
         )
     saved_version = state["cpt_state_version"]

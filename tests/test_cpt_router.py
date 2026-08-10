@@ -1,12 +1,54 @@
+import ast
 import inspect
+import textwrap
 
 import pytest
 import torch
 import torch.nn.functional as F
 
 from model.config import TinyMixtralConfig
-from model.cpt_router import CPTRouter
+from model.cpt_router import CPT_ROUTER_ALGORITHM_VERSION, CPTRouter
 from model.modeling import GQAAttention, SparseMoE, TinyMixtralForCausalLM
+
+
+LEGACY_SHORT_STATE_CONFIG_FIELDS = frozenset(
+    {
+        "cpt_rho_beta",
+        "cpt_beta_max",
+        "cpt_kappa_beta",
+        "cpt_lambda_sa",
+        "cpt_state_step_size",
+        "cpt_state_radius",
+    }
+)
+
+LEGACY_SHORT_STATE_ROUTER_ATTRIBUTES = frozenset(
+    {
+        "rho_beta",
+        "beta_max",
+        "kappa_beta",
+        "lambda_sa",
+        "state_step_size",
+        "state_radius",
+    }
+)
+
+EXPECTED_CPT_V1_3_CONFIG_FIELDS = frozenset(
+    {
+        "cpt_router_version",
+        "cpt_num_prototypes",
+        "cpt_projection_dim",
+        "cpt_prototype_temperature",
+        "cpt_expert_temperature",
+        "cpt_eps_z",
+        "cpt_eps_m",
+        "cpt_eps_init",
+        "cpt_energy_init_scale",
+        "cpt_capacity_factor",
+        "cpt_price_learning_rate",
+        "cpt_init_seed",
+    }
+)
 
 
 def tiny_config(**overrides):
@@ -28,9 +70,40 @@ def tiny_config(**overrides):
     return TinyMixtralConfig(**values)
 
 
-@torch.no_grad()
+def replace_once(source, old, new):
+    assert source.count(old) == 1
+    return source.replace(old, new, 1)
+
+
+def override_audit_sources(
+    monkeypatch,
+    *,
+    router_source=None,
+    moe_source=None,
+):
+    import scripts.audit_projection_l2_v1 as audit_projection_l2_v1
+
+    original_getsource = audit_projection_l2_v1.inspect.getsource
+    router_source = router_source or original_getsource(CPTRouter.forward)
+    moe_source = moe_source or original_getsource(SparseMoE.forward)
+
+    def get_source(obj):
+        if obj is CPTRouter.forward:
+            return router_source
+        if obj is SparseMoE.forward:
+            return moe_source
+        return original_getsource(obj)
+
+    monkeypatch.setattr(
+        audit_projection_l2_v1.inspect,
+        "getsource",
+        get_source,
+    )
+    return audit_projection_l2_v1
+
+
 def column_vector_oracle(router, hidden_states, valid_mask=None):
-    """Literal column-vector implementation of the authoritative equations."""
+    """Literal long-state-only column-vector implementation."""
     x = hidden_states.float()
     batch, sequence, _ = x.shape
     if valid_mask is None:
@@ -38,10 +111,20 @@ def column_vector_oracle(router, hidden_states, valid_mask=None):
     else:
         valid_mask = valid_mask.to(device=x.device, dtype=torch.bool)
 
-    energy = router.energy - router.energy.mean(dim=-1, keepdim=True)
-    kernel = torch.softmax(
-        (energy - router.congestion_price.unsqueeze(0)) / router.expert_temperature,
+    normalized_anchors = router.anchors / torch.linalg.vector_norm(
+        router.anchors,
+        dim=0,
+        keepdim=True,
+    ).clamp_min(router.eps_m)
+    centered_energy = router.energy - router.energy.mean(dim=-1, keepdim=True)
+    expert_kernel = torch.softmax(
+        (
+            centered_energy
+            - router.congestion_price.detach().unsqueeze(0)
+        )
+        / router.expert_temperature,
         dim=-1,
+        dtype=torch.float32,
     )
     result = torch.zeros(
         batch,
@@ -51,61 +134,71 @@ def column_vector_oracle(router, hidden_states, valid_mask=None):
         dtype=torch.float32,
     )
     for batch_index in range(batch):
-        short_state = torch.zeros(
-            router.projection_dim,
-            router.num_prototypes,
-            device=x.device,
-        )
-        responsibility = torch.zeros(router.num_prototypes, device=x.device)
         for position in range(sequence):
             if not bool(valid_mask[batch_index, position]):
                 continue
             x_column = x[batch_index, position].unsqueeze(1)
             projected = router.projection @ x_column
-            projected_norm = float(torch.linalg.vector_norm(projected))
-            z = projected / max(projected_norm, router.eps_z)
-            beta = (
-                router.beta_max
-                * responsibility
-                / (responsibility + router.kappa_beta)
-            )
-            mixed = (
-                router.anchors * (1.0 - beta.unsqueeze(0))
-                + short_state * beta.unsqueeze(0)
-            )
-            prototype_norms = torch.linalg.vector_norm(mixed, dim=0, keepdim=True)
-            prototypes = mixed / prototype_norms.clamp_min(router.eps_m)
-            q = torch.softmax(
-                (prototypes.T @ z).squeeze(1) / router.prototype_temperature,
+            z_column = projected / torch.linalg.vector_norm(
+                projected,
                 dim=0,
+                keepdim=True,
+            ).clamp_min(router.eps_z)
+            q_column = torch.softmax(
+                normalized_anchors.T @ z_column / router.prototype_temperature,
+                dim=0,
+                dtype=torch.float32,
             )
-            result[batch_index, position] = kernel.T @ q
-
-            gradient = (
-                (short_state - z.expand(-1, router.num_prototypes))
-                * q.unsqueeze(0)
-                + router.lambda_sa * (short_state - router.anchors)
-            )
-            candidate = short_state - router.state_step_size * gradient
-            norms = torch.linalg.vector_norm(candidate, dim=0, keepdim=True)
-            short_state = candidate / torch.maximum(
-                torch.ones_like(norms), norms / router.state_radius
-            )
-            responsibility = router.rho_beta * responsibility + q
+            result[batch_index, position] = (
+                expert_kernel.T @ q_column
+            ).squeeze(1)
     return result
 
 
-def test_config_derives_k_and_authoritative_defaults():
+@torch.no_grad()
+def make_expert_kernel_distinct(router):
+    """Give different prototypes observably different expert preferences."""
+    energy = torch.full_like(router.energy, -1.0)
+    prototype_indices = torch.arange(
+        router.num_prototypes,
+        device=router.energy.device,
+    )
+    energy[
+        prototype_indices,
+        prototype_indices.remainder(router.num_experts),
+    ] = 2.0
+    router.energy.copy_(energy)
+
+
+def test_config_identifies_long_state_only_router_v3():
+    config = tiny_config()
+    router = CPTRouter(config, layer_index=0)
+
+    assert config.cpt_router_version == 3
+    assert CPT_ROUTER_ALGORITHM_VERSION == 3
+    assert int(router.router_algorithm_version.item()) == 3
+    for attribute in LEGACY_SHORT_STATE_ROUTER_ATTRIBUTES:
+        assert not hasattr(router, attribute)
+
+
+def test_config_schema_removes_only_short_state_controls():
+    config = tiny_config()
+    cpt_fields = {
+        name
+        for name in TinyMixtralConfig.__dataclass_fields__
+        if name.startswith("cpt_")
+    }
+
+    assert cpt_fields == EXPECTED_CPT_V1_3_CONFIG_FIELDS
+    assert set(config.cpt_config_dict()) == EXPECTED_CPT_V1_3_CONFIG_FIELDS
+    assert LEGACY_SHORT_STATE_CONFIG_FIELDS.isdisjoint(cpt_fields)
+    assert config.cpt_eps_m == pytest.approx(1e-6)
+
+
+def test_config_derives_k_and_authoritative_long_state_defaults():
     config = tiny_config()
     assert config.cpt_num_prototypes == 2 * config.num_local_experts == 6
-    assert config.cpt_kappa_beta == pytest.approx(
-        1.0 / (6 * (1.0 - config.cpt_rho_beta)), rel=2e-6
-    )
-    assert config.cpt_lambda_sa == pytest.approx(1.0 / 6, rel=2e-6)
     assert config.cpt_prototype_temperature == pytest.approx(0.5)
-    assert config.cpt_state_step_size == pytest.approx(
-        0.1 / (1.0 + 1.0 / 6), rel=2e-6
-    )
     assert config.cpt_energy_init_scale == pytest.approx(
         0.05 * config.cpt_expert_temperature
     )
@@ -118,11 +211,13 @@ def test_config_derives_k_and_authoritative_defaults():
     "updates, message",
     [
         ({"cpt_num_prototypes": 5}, r"2 \* num_local_experts"),
-        ({"cpt_router_version": 2}, "version=1"),
+        ({"cpt_router_version": True}, "cpt_router_version=3"),
+        ({"cpt_router_version": 1}, "cpt_router_version=3"),
+        ({"cpt_router_version": 2}, "cpt_router_version=3"),
+        ({"cpt_router_version": 4}, "cpt_router_version=3"),
         ({"cpt_projection_dim": 1}, "more than two"),
-        ({"cpt_rho_beta": float("nan")}, "finite"),
-        ({"cpt_beta_max": 0.0}, "cpt_beta_max"),
-        ({"cpt_beta_max": 0.5}, "cpt_beta_max"),
+        ({"cpt_prototype_temperature": 0.0}, "positive"),
+        ({"cpt_eps_m": 0.0}, "positive"),
         ({"cpt_capacity_factor": 0.9}, "at least 1"),
         ({"num_experts_per_tok": 2.0}, "positive integer"),
         ({"num_experts_per_tok": True}, "positive integer"),
@@ -138,11 +233,6 @@ def test_config_derives_k_and_authoritative_defaults():
 def test_config_rejects_invalid_cpt_contract(updates, message):
     with pytest.raises(ValueError, match=message):
         tiny_config(**updates)
-
-
-def test_default_state_step_size_uses_effective_lambda_sa():
-    config = tiny_config(cpt_lambda_sa=0.25)
-    assert config.cpt_state_step_size == pytest.approx(0.1 / 1.25, rel=2e-6)
 
 
 def test_energy_initialization_accepts_valid_scale_below_eps_init():
@@ -182,6 +272,7 @@ def test_initialization_uses_eps_init_only_in_authoritative_energy_denominator()
 def test_token_major_forward_matches_column_vector_oracle(seed):
     torch.manual_seed(seed)
     router = CPTRouter(tiny_config(), layer_index=0)
+    make_expert_kernel_distinct(router)
     hidden = torch.randn(2, 5, router.hidden_size)
     mask = torch.tensor([[1, 1, 0, 1, 0], [0, 1, 1, 1, 1]], dtype=torch.bool)
     actual = router(hidden, mask).probabilities
@@ -191,6 +282,47 @@ def test_token_major_forward_matches_column_vector_oracle(seed):
         actual[mask].sum(dim=-1), torch.ones(int(mask.sum())), atol=2e-6, rtol=0
     )
     assert torch.equal(actual[~mask], torch.zeros_like(actual[~mask]))
+
+
+def test_router_gradients_match_long_state_column_vector_oracle():
+    torch.manual_seed(8)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    make_expert_kernel_distinct(router)
+    with torch.no_grad():
+        router.anchors.mul_(
+            torch.linspace(
+                0.7,
+                1.3,
+                router.num_prototypes,
+                dtype=torch.float32,
+            ).unsqueeze(0)
+        )
+
+    mask = torch.tensor(
+        [[1, 1, 0, 1], [1, 0, 1, 1]],
+        dtype=torch.bool,
+    )
+    hidden_values = torch.randn(2, 4, router.hidden_size)
+    loss_weights = torch.randn(2, 4, router.num_experts)
+
+    actual_hidden = hidden_values.clone().requires_grad_()
+    actual_probabilities = router(actual_hidden, mask).probabilities
+    actual_loss = (actual_probabilities * loss_weights).sum()
+    actual_gradients = torch.autograd.grad(
+        actual_loss,
+        (actual_hidden, router.projection, router.anchors, router.energy),
+    )
+
+    oracle_hidden = hidden_values.clone().requires_grad_()
+    oracle_probabilities = column_vector_oracle(router, oracle_hidden, mask)
+    oracle_loss = (oracle_probabilities * loss_weights).sum()
+    oracle_gradients = torch.autograd.grad(
+        oracle_loss,
+        (oracle_hidden, router.projection, router.anchors, router.energy),
+    )
+
+    for actual, expected in zip(actual_gradients, oracle_gradients):
+        torch.testing.assert_close(actual, expected, atol=5e-6, rtol=5e-5)
 
 
 @pytest.mark.parametrize("scale", [0.0, 1e-12, 1.0, 1e6])
@@ -209,7 +341,7 @@ def test_router_is_finite_for_zero_near_zero_and_extreme_inputs(scale):
     )
 
 
-def test_strict_v1_projection_has_no_projection_softmax():
+def test_long_state_v3_projection_has_no_projection_softmax():
     router = CPTRouter(tiny_config(), layer_index=0)
     hidden = torch.tensor([[[2.0, -1.0, 0.5, 3.0, -2.0, 1.5, 0.25, -0.75]]])
     actual = router(hidden).probabilities[0, 0]
@@ -235,7 +367,375 @@ def test_router_emits_final_probabilities_with_one_micro_batch_gemm():
     assert source.count("@ kernel") == 1
 
 
-def test_padding_is_not_routed_and_does_not_advance_sequence_state():
+def test_router_forward_ast_has_no_short_state_or_position_scan():
+    source = textwrap.dedent(inspect.getsource(CPTRouter.forward))
+    tree = ast.parse(source)
+    loops = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+    ]
+    identifiers = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+    }
+    identifiers.update(
+        node.arg
+        for node in ast.walk(tree)
+        if isinstance(node, ast.arg)
+    )
+    identifiers.update(
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+    )
+    forbidden_identifiers = {
+        "short_state",
+        "responsibility",
+        "beta",
+        "state_old",
+        "nu_old",
+        "state_gradient",
+        "state_candidate",
+        "prototype_probability_steps",
+    }
+
+    assert loops == []
+    assert identifiers.isdisjoint(forbidden_identifiers)
+    assert "normalized_anchors" in identifiers
+
+
+def test_source_audit_is_invariant_to_local_variable_names(monkeypatch):
+    import scripts.audit_projection_l2_v1 as audit_projection_l2_v1
+
+    def rename_locals(source, replacements):
+        tree = ast.parse(textwrap.dedent(source))
+
+        class LocalNameRenamer(ast.NodeTransformer):
+            def visit_Name(self, node):
+                replacement = replacements.get(node.id)
+                if replacement is not None:
+                    node.id = replacement
+                return node
+
+        return ast.unparse(LocalNameRenamer().visit(tree))
+
+    original_getsource = audit_projection_l2_v1.inspect.getsource
+    router_source = rename_locals(
+        original_getsource(CPTRouter.forward),
+        {
+            "projected": "token_projection",
+            "kernel": "expert_mixture",
+            "normalized_anchors": "anchor_columns",
+            "prototype_logits": "assignment_logits",
+            "nominal_prototype_probabilities": "prototype_distribution",
+            "flat_prototype_probabilities": "flattened_distribution",
+            "valid_token_indices": "active_token_indices",
+            "prototype_probabilities": "active_prototype_distribution",
+            "valid_probabilities": "active_expert_probabilities",
+            "flat_probabilities": "flattened_expert_probabilities",
+            "probabilities": "expert_probabilities",
+        },
+    )
+    moe_source = rename_locals(
+        original_getsource(SparseMoE.forward),
+        {
+            "router_output": "cpt_result",
+            "all_routing_weights": "dense_routes",
+            "valid_token_idx": "active_indices",
+            "routing_weights": "active_routes",
+            "routing_weights_topk": "selected_route_weights",
+            "selected_experts": "selected_expert_indices",
+        },
+    )
+
+    audit_projection_l2_v1 = override_audit_sources(
+        monkeypatch,
+        router_source=router_source,
+        moe_source=moe_source,
+    )
+    audit_projection_l2_v1.audit_source_contract(tiny_config())
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            "kernel = self.expert_kernel()",
+            "kernel = self.expert_kernel()\n"
+            "            kernel = torch.zeros_like(kernel)",
+            "expert_kernel result must flow directly",
+        ),
+        (
+            "kernel = self.expert_kernel()",
+            "kernel = self.expert_kernel()\n"
+            "            *kernel, = [torch.zeros_like(kernel)]",
+            "expert_kernel result must flow directly",
+        ),
+        (
+            "prototype_probabilities @ kernel",
+            "torch.zeros_like(prototype_probabilities) @ kernel",
+            "prototype probabilities must flow directly",
+        ),
+    ],
+)
+def test_source_audit_rejects_broken_router_dataflow(
+    monkeypatch,
+    old,
+    new,
+    message,
+):
+    import scripts.audit_projection_l2_v1 as audit_projection_l2_v1
+
+    router_source = replace_once(
+        audit_projection_l2_v1.inspect.getsource(CPTRouter.forward),
+        old,
+        new,
+    )
+    audit_projection_l2_v1 = override_audit_sources(
+        monkeypatch,
+        router_source=router_source,
+    )
+
+    with pytest.raises(AssertionError, match=message):
+        audit_projection_l2_v1.audit_source_contract(tiny_config())
+
+
+def test_source_audit_ignores_annotation_only_statements(monkeypatch):
+    import scripts.audit_projection_l2_v1 as audit_projection_l2_v1
+
+    router_source = replace_once(
+        audit_projection_l2_v1.inspect.getsource(CPTRouter.forward),
+        "kernel = self.expert_kernel()",
+        "kernel = self.expert_kernel()\n"
+        "            kernel: torch.Tensor",
+    )
+    audit_projection_l2_v1 = override_audit_sources(
+        monkeypatch,
+        router_source=router_source,
+    )
+
+    audit_projection_l2_v1.audit_source_contract(tiny_config())
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            "self.top_k,\n            dim=-1,",
+            "1,\n            dim=-1,",
+            "Top-2 must use self.top_k",
+        ),
+        (
+            "self.top_k,\n            dim=-1,",
+            "self.top_k,\n            dim=0,",
+            "Top-2 must operate on the expert dimension",
+        ),
+    ],
+)
+def test_source_audit_rejects_invalid_topk_contract(
+    monkeypatch,
+    old,
+    new,
+    message,
+):
+    import scripts.audit_projection_l2_v1 as audit_projection_l2_v1
+
+    moe_source = replace_once(
+        audit_projection_l2_v1.inspect.getsource(SparseMoE.forward),
+        old,
+        new,
+    )
+    audit_projection_l2_v1 = override_audit_sources(
+        monkeypatch,
+        moe_source=moe_source,
+    )
+
+    with pytest.raises(AssertionError, match=message):
+        audit_projection_l2_v1.audit_source_contract(tiny_config())
+
+
+@pytest.mark.parametrize(
+    ("callable_binding", "softmax_expression", "global_softmax_alias"),
+    [
+        pytest.param(
+            "",
+            "F.softmax(post_pi_alias, dim=-1)",
+            None,
+            id="data-alias",
+        ),
+        pytest.param(
+            "apply_probability_normalization = F.softmax\n",
+            "apply_probability_normalization(post_pi_alias, dim=-1)",
+            None,
+            id="callable-alias",
+        ),
+        pytest.param(
+            "apply_probability_normalization = torch.nn.Softmax(dim=-1)\n",
+            "apply_probability_normalization(post_pi_alias)",
+            None,
+            id="module-alias",
+        ),
+        pytest.param(
+            "from torch.nn.functional import softmax as "
+            "apply_probability_normalization\n",
+            "apply_probability_normalization(post_pi_alias, dim=-1)",
+            None,
+            id="local-import-alias",
+        ),
+        pytest.param(
+            "",
+            "apply_probability_normalization(post_pi_alias, dim=-1)",
+            F.softmax,
+            id="global-functional-alias",
+        ),
+        pytest.param(
+            "",
+            "apply_probability_normalization(post_pi_alias, dim=-1)",
+            torch.softmax,
+            id="global-torch-function-alias",
+        ),
+        pytest.param(
+            "",
+            "apply_probability_normalization(post_pi_alias, dim=-1)",
+            torch.Tensor.softmax,
+            id="global-tensor-method-alias",
+        ),
+        pytest.param(
+            "",
+            "apply_probability_normalization(post_pi_alias, dim=-1)",
+            torch.special.softmax,
+            id="global-special-function-alias",
+        ),
+        pytest.param(
+            "",
+            "apply_probability_normalization(post_pi_alias)",
+            torch.nn.Softmax(dim=-1),
+            id="global-module-instance-alias",
+        ),
+    ],
+)
+def test_source_audit_rejects_post_pi_softmax_through_aliases(
+    monkeypatch,
+    callable_binding,
+    softmax_expression,
+    global_softmax_alias,
+):
+    import scripts.audit_projection_l2_v1 as audit_projection_l2_v1
+
+    if global_softmax_alias is not None:
+        monkeypatch.setitem(
+            SparseMoE.forward.__globals__,
+            "apply_probability_normalization",
+            global_softmax_alias,
+        )
+
+    moe_tree = ast.parse(
+        textwrap.dedent(
+            audit_projection_l2_v1.inspect.getsource(SparseMoE.forward)
+        )
+    )
+
+    class InsertAliasedPostPiSoftmax(ast.NodeTransformer):
+        def __init__(self):
+            self.mutations = 0
+
+        def visit_Assign(self, node):
+            node = self.generic_visit(node)
+            if not (
+                isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)
+                and isinstance(node.value.func.value, ast.Name)
+                and node.value.func.value.id == "torch"
+                and node.value.func.attr == "topk"
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], (ast.Tuple, ast.List))
+                and len(node.targets[0].elts) == 2
+                and isinstance(node.targets[0].elts[0], ast.Name)
+            ):
+                return node
+
+            self.mutations += 1
+            weight_name = node.targets[0].elts[0].id
+            mutation_source = (
+                callable_binding
+                + f"post_pi_alias = {weight_name}\n"
+                + f"post_pi_alias = {softmax_expression}\n"
+                + f"{weight_name} = post_pi_alias"
+            )
+            mutation = ast.parse(mutation_source).body
+            return [node, *mutation]
+
+    transformer = InsertAliasedPostPiSoftmax()
+    moe_tree = transformer.visit(moe_tree)
+    assert transformer.mutations == 1
+    moe_source = ast.unparse(ast.fix_missing_locations(moe_tree))
+    audit_projection_l2_v1 = override_audit_sources(
+        monkeypatch,
+        moe_source=moe_source,
+    )
+
+    with pytest.raises(AssertionError, match="illegal post-Pi softmax"):
+        audit_projection_l2_v1.audit_source_contract(tiny_config())
+
+
+def test_token_permutation_only_permutes_router_probabilities():
+    torch.manual_seed(10)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    make_expert_kernel_distinct(router)
+    hidden = torch.randn(2, 6, router.hidden_size)
+    permutation = torch.tensor([4, 1, 5, 0, 3, 2])
+
+    original = router(hidden)
+    permuted = router(hidden[:, permutation])
+
+    torch.testing.assert_close(
+        permuted.probabilities,
+        original.probabilities[:, permutation],
+        atol=0,
+        rtol=0,
+    )
+    torch.testing.assert_close(
+        permuted.proposal.load_sum,
+        original.proposal.load_sum,
+        atol=2e-6,
+        rtol=2e-6,
+    )
+    assert torch.equal(
+        permuted.proposal.token_count,
+        original.proposal.token_count,
+    )
+
+
+def test_same_token_route_is_independent_of_prefix_and_sequence_length():
+    torch.manual_seed(12)
+    router = CPTRouter(tiny_config(), layer_index=0)
+    make_expert_kernel_distinct(router)
+    target = torch.randn(1, 1, router.hidden_size)
+    prefix_a = torch.randn(1, 2, router.hidden_size)
+    prefix_b = torch.randn(1, 4, router.hidden_size)
+    suffix = torch.randn(1, 3, router.hidden_size)
+
+    target_alone = router(target).probabilities[:, 0]
+    after_prefix_a = router(
+        torch.cat((prefix_a, target), dim=1)
+    ).probabilities[:, -1]
+    after_prefix_b = router(
+        torch.cat((prefix_b, target), dim=1)
+    ).probabilities[:, -1]
+    before_suffix = router(torch.cat((target, suffix), dim=1)).probabilities[:, 0]
+
+    for routed_target in (after_prefix_a, after_prefix_b, before_suffix):
+        torch.testing.assert_close(
+            routed_target,
+            target_alone,
+            atol=2e-6,
+            rtol=2e-6,
+        )
+
+
+def test_padding_is_not_routed_and_does_not_affect_valid_routes_or_proposal():
     torch.manual_seed(11)
     router = CPTRouter(tiny_config(), layer_index=0)
     valid = torch.randn(1, 3, router.hidden_size)
@@ -293,7 +793,7 @@ def test_padding_nan_hidden_has_zero_gradient_and_detached_proposal():
     assert float(hidden.grad[mask].abs().sum()) > 0
 
 
-def test_later_token_router_loss_has_no_cross_token_bptt():
+def test_single_token_router_loss_only_gradients_the_same_token_hidden():
     torch.manual_seed(17)
     router = CPTRouter(tiny_config(), layer_index=0)
     hidden = torch.randn(1, 4, router.hidden_size, requires_grad=True)
@@ -306,7 +806,7 @@ def test_later_token_router_loss_has_no_cross_token_bptt():
     assert float(hidden.grad[:, -1].abs().sum()) > 0
 
 
-def test_batch_rows_are_independent_and_router_is_causal():
+def test_batch_rows_are_independent_and_suffix_changes_do_not_affect_prefix():
     torch.manual_seed(19)
     router = CPTRouter(tiny_config(), layer_index=1)
     hidden = torch.randn(2, 5, router.hidden_size)

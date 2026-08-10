@@ -165,8 +165,8 @@ class SparseMoE(nn.Module):
         self.top_k = config.num_experts_per_tok
         self.expert_intermediate = config.expert_intermediate_size
 
-        # Strict CPT v1 probability Router.  The legacy Linear gate and its
-        # jitter are intentionally absent.
+        # CPT v1.3 long-state-only probability Router.  The legacy Linear
+        # gate and its jitter are intentionally absent.
         self.cpt_router = CPTRouter(config, layer_index=layer_index)
 
         # Expert 参数：每个 expert 有 gate_proj, up_proj, down_proj
@@ -637,7 +637,7 @@ class TinyMixtralForCausalLM(nn.Module):
         legacy = [key for key in keys if key.endswith(".moe.router.weight")]
         if legacy:
             raise RuntimeError(
-                "legacy Linear Router checkpoints are incompatible with CPT v1: "
+                "legacy Linear Router checkpoints are incompatible with CPT v1.3: "
                 + ", ".join(legacy)
             )
 
