@@ -426,11 +426,10 @@ python scripts/resume.py \
 
 ### 8.3 交接清单(接手人需完成)
 
-1. ~~给 train.py 加 config-json 支持~~(**已完成**:`--config-json` 参数 + `configs/model/cpt_v2*.json` 已入库)。
-2. 按 8.1 首选 v2 配置(即 `--config-json configs/model/cpt_v2.json`)跑**预训练**(4B)→ **后训练**(1B)→ **GLUE/ARC 评估**。
-3. 对比 v1.1 基线(last-work.md 记录:GLUE 0.513)。**MRPC 是否恢复 + GLUE mean 是否 ≥0.513 是核心裁决指标。**
-4. 若 v2 分化不足或下游不改善,试备选(`configs/model/cpt_v2_conservative.json` 或 `configs/model/cpt_v2_balanced.json`),或按 7.9 补主动分化机制。
-5. 若 checkpoint 可用,先做零成本体检(测 B 行余弦/专家对多样性)再跑全量,可省一轮。
+1. 按 8.1 首选 v2 配置(即 `--config-json configs/model/cpt_v2.json`)跑**预训练**(4B)→ **后训练**(1B)→ **GLUE/ARC 评估**。
+2. 对比 v1.1 基线(last-work.md 记录:GLUE 0.513)。**MRPC 是否恢复 + GLUE mean 是否 ≥0.513 是核心裁决指标。**
+3. 若 v2 分化不足或下游不改善,试备选(`configs/model/cpt_v2_conservative.json` 或 `configs/model/cpt_v2_balanced.json`),或按 7.9 补主动分化机制。
+4. 若 checkpoint 可用,先做零成本体检(测 B 行余弦/专家对多样性)再跑全量,可省一轮。
 
 ## 九、方法论沉淀
 
