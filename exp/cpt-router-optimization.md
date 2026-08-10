@@ -403,12 +403,19 @@ python scripts/train.py \
 
 不传 `--config-json` 则用 `TinyMixtralConfig()` 默认值(即 v1.1 架构 + CPT 默认超参),行为与以前一致。
 
-**② 后训练**(从预训练 checkpoint 续训,1B tokens)——复用 `scripts/resume.py` 或 `scripts/train.py` 加载 checkpoint 后跑(若 resume 需要 LR 覆盖,见 resume.py 参数):
+**② 后训练**(从预训练 checkpoint 续训,1B tokens)——**必须用 `scripts/resume.py`**(`--max-tokens` 触发后训练模式;`train.py` 从零构建、不加载 checkpoint,不能用于后训练)。命令与 v1.1 后训练配方对齐(last-work.md:LR 2e-5、warmup 300、batch 24):
 ```bash
-python scripts/train.py --cache-dir data/posttrain2/knowledge_blend \
-  --output-dir checkpoints/cpt_v2_posttrain --batch-size 24 --seq-len 1024 \
-  --lr 2e-5 --wd 0.1 --max-tokens 1000000000 --schedule cosine
+python scripts/resume.py \
+  --checkpoint-dir checkpoints/cpt_v2 \
+  --output-dir checkpoints/cpt_v2_posttrain \
+  --cache-dir data/posttrain2/knowledge_blend \
+  --max-tokens 1000000000 --lr 2e-5 --warmup-steps 300 \
+  --batch-size 24 --seq-len 1024 --schedule cosine --bf16-optim
 ```
+说明:
+- `--checkpoint-dir` 指向预训练输出,resume.py 自动取其中最新(最终)checkpoint;CPT 超参已存于该 checkpoint 的 config.json,后训练无需再传 `--config-json`。
+- 后训练数据用 `data/posttrain2/knowledge_blend`(Wiki+Cosmo 混合,~1B token)。v1.1 原 `data/posttrain/` 已清理,此为现有等价数据。
+- resume.py 后训练模式会重置步数/token 计数/数据位置/LR schedule,但**继承预训练的优化器动量**(exp_avg/exp_avg_sq);与 v1.1 后训练机制一致,保证对比公平。
 
 **③ 评估(GLUE/ARC,裁决点)**:
 - GLUE:复用 `scripts/eval_glue.py`(zero-shot,7 任务主指标,除 CoLA)
