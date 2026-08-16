@@ -17,6 +17,8 @@ from scripts.train_utils import (
 
 def main():
     p = argparse.ArgumentParser()
+    p.add_argument("--config", default=None,
+                   help="模型配置 JSON 文件（默认使用 TinyMixtralConfig 默认值）")
     p.add_argument("--cache-dir", default="data/c4/tokenized")
     p.add_argument("--output-dir", default="checkpoints/run")
     p.add_argument("--batch-size", type=int, default=22)
@@ -45,7 +47,11 @@ def main():
         p.error("save-every-min and log-every must be positive")
     if args.keep_last_checkpoints <= 0:
         p.error("keep-last-checkpoints must be positive")
-    cfg = TinyMixtralConfig()
+    if args.config is not None:
+        cfg = TinyMixtralConfig.from_json_file(args.config)
+        print(f"Config loaded from {args.config}", flush=True)
+    else:
+        cfg = TinyMixtralConfig()
     if args.seq_len > cfg.max_position_embeddings:
         p.error(
             f"seq-len {args.seq_len} exceeds model limit {cfg.max_position_embeddings}"
