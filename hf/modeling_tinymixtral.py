@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, GenerationMixin
+from transformers.modeling_outputs import ModelOutput
 
 from .configuration_tinymixtral import TinyMixtralConfig
 
@@ -73,22 +74,33 @@ class GQAAttention(nn.Module):
         self.rotary_emb = RotaryEmbedding(self.head_dim, config.max_position_embeddings, config.rope_theta)
         self.attention_dropout = config.attention_dropout
 
-    def forward(self, hidden_states, attention_mask=None, position_ids=None):
+    def forward(self, hidden_states, attention_mask=None, position_ids=None, past_key_value=None, use_cache=False):
         B, S, _ = hidden_states.shape
         q = self.q_proj(hidden_states).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        cache_len = past_key_value[0].shape[2] if past_key_value is not None else 0
         if position_ids is None:
-            position_ids = torch.arange(S, device=hidden_states.device).unsqueeze(0).expand(B, -1)
+            position_ids = torch.arange(cache_len, cache_len + S, device=hidden_states.device).unsqueeze(0).expand(B, -1)
         q, k = self.rotary_emb(q, position_ids), self.rotary_emb(k, position_ids)
 
-        if attention_mask is not None:
-            k_exp = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-            v_exp = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, S, self.head_dim)
-            causal = torch.tril(torch.ones(S, S, device=hidden_states.device, dtype=torch.bool))
-            combined = causal[None, None, :, :] & attention_mask[:, None, None, :]
+        if past_key_value is not None:
+            k = torch.cat([past_key_value[0], k], dim=2)
+            v = torch.cat([past_key_value[1], v], dim=2)
+        cache = (k, v) if use_cache else None
+        total_len = cache_len + S
+
+        if attention_mask is not None or cache_len > 0:
+            k_exp = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, total_len, self.head_dim)
+            v_exp = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1).reshape(B, self.num_heads, total_len, self.head_dim)
+            causal = torch.tril(torch.ones(S, total_len, device=hidden_states.device, dtype=torch.bool), diagonal=cache_len)
+            if attention_mask is not None:
+                mask = causal[None, None, :, :] & attention_mask[:, None, None, :]
+            else:
+                mask = causal[None, None, :, :]
             attn = F.scaled_dot_product_attention(
-                q, k_exp, v_exp, attn_mask=combined,
+                q, k_exp, v_exp, attn_mask=mask,
                 dropout_p=self.attention_dropout if self.training else 0.0,
                 is_causal=False,
             )
@@ -99,7 +111,7 @@ class GQAAttention(nn.Module):
                 is_causal=True,
                 enable_gqa=True,
             )
-        return self.o_proj(attn.transpose(1, 2).reshape(B, S, -1))
+        return self.o_proj(attn.transpose(1, 2).reshape(B, S, -1)), cache
 
 
 class SparseMoE(nn.Module):
@@ -177,10 +189,13 @@ class MoETransformerBlock(nn.Module):
         self.self_attn = GQAAttention(config)
         self.moe = SparseMoE(config)
 
-    def forward(self, x, attention_mask=None, position_ids=None):
-        x = x + self.self_attn(self.input_layernorm(x), attention_mask, position_ids)
+    def forward(self, x, attention_mask=None, position_ids=None, past_key_value=None, use_cache=False):
+        attn_out, new_cache = self.self_attn(
+            self.input_layernorm(x), attention_mask, position_ids, past_key_value, use_cache
+        )
+        x = x + attn_out
         h, aux = self.moe(self.post_attention_layernorm(x))
-        return x + h, aux
+        return x + h, aux, new_cache
 
 
 # ============================================================
@@ -188,16 +203,22 @@ class MoETransformerBlock(nn.Module):
 # ============================================================
 
 @dataclass
-class CausalLMOutputWithPast:
+class CausalLMOutputWithPast(ModelOutput):
     loss: Optional[torch.Tensor] = None
     logits: torch.Tensor = None
+    past_key_values: Optional[tuple] = None
 
 
-class TinyMixtralForCausalLM(PreTrainedModel):
+class TinyMixtralForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = TinyMixtralConfig
     base_model_prefix = "tinymixtral"
     supports_gradient_checkpointing = True
     _no_split_modules = ["MoETransformerBlock"]
+    _supports_cache_class = False
+    _supports_static_cache = False
+
+    def _supports_default_dynamic_cache(self):
+        return False
 
     def __init__(self, config):
         super().__init__(config)
@@ -209,6 +230,23 @@ class TinyMixtralForCausalLM(PreTrainedModel):
             self.lm_head.weight = self.embed_tokens.weight
         self._use_activation_checkpointing = False
         self.post_init()
+        if getattr(self.config, "eos_token_id", None) is None:
+            self.config.eos_token_id = 2
+            self.config.pad_token_id = 2
+
+    def prepare_inputs_for_generation(self, input_ids, attention_mask=None, past_key_values=None, **kwargs):
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "past_key_values": past_key_values,
+            "use_cache": kwargs.get("use_cache", True),
+        }
+
+    def _reorder_cache(self, past_key_values, beam_idx):
+        return tuple(
+            tuple(past.index_select(0, beam_idx) for past in layer_past)
+            for layer_past in past_key_values
+        )
 
     def _init_weights(self, module):
         std = self.config.initializer_range
@@ -225,18 +263,25 @@ class TinyMixtralForCausalLM(PreTrainedModel):
     def gradient_checkpointing_disable(self):
         self._use_activation_checkpointing = False
 
-    def forward(self, input_ids, attention_mask=None, labels=None, return_dict=True, **kwargs):
+    def forward(self, input_ids, attention_mask=None, labels=None, return_dict=True, past_key_values=None, use_cache=False, **kwargs):
         B, S = input_ids.shape
-        pos = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
+        past_len = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+        if past_len > 0 and S > past_len:
+            input_ids = input_ids[:, past_len:]
+            S = input_ids.shape[1]
+        pos = torch.arange(past_len, past_len + S, device=input_ids.device).unsqueeze(0).expand(B, -1)
         cmask = attention_mask.bool() if attention_mask is not None else None
 
         h = self.embed_tokens(input_ids)
         total_aux = torch.tensor(0.0, device=input_ids.device, dtype=torch.float32)
-        for layer in self.layers:
+        new_caches = []
+        for i, layer in enumerate(self.layers):
+            layer_cache = past_key_values[i] if past_key_values is not None else None
             if self._use_activation_checkpointing and self.training:
-                h, aux = checkpoint(layer, h, cmask, pos, use_reentrant=False)
+                h, aux, _ = checkpoint(layer, h, cmask, pos, None, False, use_reentrant=False)
             else:
-                h, aux = layer(h, cmask, pos)
+                h, aux, layer_new_cache = layer(h, cmask, pos, layer_cache, use_cache)
+                new_caches.append(layer_new_cache)
             total_aux = total_aux + aux
         logits = self.lm_head(self.norm(h)).float()
 
@@ -249,6 +294,7 @@ class TinyMixtralForCausalLM(PreTrainedModel):
             )
             loss = loss + self.config.router_aux_loss_coef * (total_aux / len(self.layers))
 
+        past_key_values_out = tuple(new_caches) if use_cache else None
         if not return_dict:
-            return (loss, logits) if loss is not None else (logits,)
-        return CausalLMOutputWithPast(loss=loss, logits=logits)
+            return (loss, logits, past_key_values_out) if loss is not None else (logits, past_key_values_out)
+        return CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=past_key_values_out)

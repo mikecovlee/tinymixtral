@@ -296,28 +296,34 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
 
             # ---- 分片循环 ----
             if ptr + chunk > len(shard):
+                if fi + 1 >= len(files):
+                    print(f"  WARNING: Training data exhausted at step {step+1} "
+                          f"(shard {fi}/{len(files)-1}, ptr {ptr})", flush=True)
+                    print(f"  WARNING: Reached dataset end before target {max_steps} steps "
+                          f"({total_tok:,}/{max_steps*bs*seq:,} tokens consumed)", flush=True)
+                    print(f"  WARNING: Check --max-tokens vs dataset size, or provide more data. "
+                          f"Saving final checkpoint and exiting.", flush=True)
+                    break
+                fi += 1
                 ptr = 0
-                for _ in range(len(files)):
-                    fi = (fi + 1) % len(files)
-                    del shard
-                    shard = torch.load(files[fi], weights_only=True)
-                    if len(shard) >= chunk:
-                        break
-                else:
-                    raise RuntimeError(f"No shard contains at least {chunk} tokens")
+                del shard
+                shard = torch.load(files[fi], weights_only=True)
+                if len(shard) < chunk:
+                    raise RuntimeError(f"Shard {fi} contains only {len(shard)} tokens (< {chunk})")
 
             batch = shard[ptr:ptr + chunk]
             if batch.numel() != chunk:
                 print(f"  WARN: short read {batch.numel()}/{chunk} shard={fi}", flush=True)
+                if fi + 1 >= len(files):
+                    print(f"  WARNING: Training data exhausted at step {step+1}; "
+                          f"saving final checkpoint and exiting.", flush=True)
+                    break
+                fi += 1
                 ptr = 0
-                for _ in range(len(files)):
-                    fi = (fi + 1) % len(files)
-                    del shard
-                    shard = torch.load(files[fi], weights_only=True)
-                    if len(shard) >= chunk:
-                        break
-                else:
-                    raise RuntimeError(f"No shard contains at least {chunk} tokens")
+                del shard
+                shard = torch.load(files[fi], weights_only=True)
+                if len(shard) < chunk:
+                    raise RuntimeError(f"Shard {fi} contains only {len(shard)} tokens (< {chunk})")
                 continue
 
             batch = batch.view(bs, seq + 1).to("cuda", non_blocking=True)

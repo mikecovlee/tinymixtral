@@ -45,7 +45,7 @@ python scripts/train.py \
   --cache-dir data/pretrain/smollm_blend \
   --output-dir "$OUTPUT_DIR" \
   --batch-size 16 \
-  --max-tokens 4000000000 \
+  --max-tokens 3996090368 \
   --lr 7e-4 --schedule wsd --warmup-steps 2000 \
   --bf16-optim \
   --save-every-min "$SAVE_EVERY_MIN" \
