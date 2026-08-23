@@ -148,8 +148,13 @@ def main():
                 break
 
         if args.max_tokens is not None and total_tokens != args.max_tokens:
-            raise RuntimeError(
-                f"Dataset ended after {total_tokens} tokens, before target {args.max_tokens}"
+            print(
+                f"WARNING: dataset ended after {total_tokens:,} tokens, "
+                f"target was {args.max_tokens:,} "
+                f"({total_tokens / args.max_tokens * 100:.1f}%). "
+                f"Continuing with available data; check training handles the "
+                f"short dataset (it will warn and save on exhaustion).",
+                flush=True,
             )
 
         if buf:
