@@ -1,0 +1,24 @@
+{
+  "checkpoint": "checkpoints/v1b_moe_posttrain/step_0060975_final",
+  "split": "test",
+  "num_examples": 819,
+  "max_new_tokens": 64,
+  "rouge": {
+    "rouge1": {
+      "p": 7.49,
+      "r": 17.26,
+      "f": 9.83
+    },
+    "rouge2": {
+      "p": 0.4,
+      "r": 0.85,
+      "f": 0.5
+    },
+    "rougeLsum": {
+      "p": 5.92,
+      "r": 14.16,
+      "f": 7.85
+    }
+  },
+  "time_seconds": 214.4
+}

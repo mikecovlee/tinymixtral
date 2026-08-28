@@ -1,0 +1,24 @@
+{
+  "checkpoint": "checkpoints/samsum_ft/step_0003240_final",
+  "split": "test",
+  "num_examples": 819,
+  "max_new_tokens": 64,
+  "rouge": {
+    "rouge1": {
+      "p": 38.14,
+      "r": 26.76,
+      "f": 28.82
+    },
+    "rouge2": {
+      "p": 11.89,
+      "r": 7.95,
+      "f": 8.55
+    },
+    "rougeLsum": {
+      "p": 31.62,
+      "r": 22.58,
+      "f": 24.08
+    }
+  },
+  "time_seconds": 133.3
+}
