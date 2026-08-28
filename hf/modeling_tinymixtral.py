@@ -270,6 +270,12 @@ class TinyMixtralForCausalLM(PreTrainedModel, GenerationMixin):
             input_ids = input_ids[:, past_len:]
             S = input_ids.shape[1]
         pos = torch.arange(past_len, past_len + S, device=input_ids.device).unsqueeze(0).expand(B, -1)
+
+        total_len = past_len + S
+        if attention_mask is not None and attention_mask.shape[1] < total_len:
+            pad = torch.ones(B, total_len - attention_mask.shape[1],
+                             dtype=attention_mask.dtype, device=attention_mask.device)
+            attention_mask = torch.cat([pad, attention_mask], dim=1)
         cmask = attention_mask.bool() if attention_mask is not None else None
 
         h = self.embed_tokens(input_ids)
