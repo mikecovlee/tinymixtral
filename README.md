@@ -1,7 +1,8 @@
 # TinyMixtral
 
-A small Mixtral-style Mixture-of-Experts causal language model (~432M total, ~176M active parameters) for pretraining research on a single consumer GPU.
+A Mixtral-style Mixture-of-Experts causal language model for pretraining research on a single consumer GPU. The current **1B MoE** release is ~1.18B total / ~352M active params (top-2 of 8 experts). Smaller earlier variants (v1.1 ~432M, v2.0 beta ~498M) are kept for comparison and ablation.
 
+[![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral--1B-blue)](https://huggingface.co/mikecovlee/tinymixtral-1B)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral-yellow)](https://huggingface.co/mikecovlee/tinymixtral)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral--v2.0--beta-orange)](https://huggingface.co/mikecovlee/tinymixtral-v2.0-beta)
 
@@ -11,36 +12,37 @@ A small Mixtral-style Mixture-of-Experts causal language model (~432M total, ~17
 from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained(
-    "mikecovlee/tinymixtral", trust_remote_code=True
+    "mikecovlee/tinymixtral-1B", trust_remote_code=True
 )
 ```
 
-The latest model (SmolLM blend pretrain + Wiki/Cosmopedia post-train) is available at [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral).
+The flagship **1B MoE** (SmolLM-blend pretrain; 4B tokens, continued to 8B) is available at [mikecovlee/tinymixtral-1B](https://huggingface.co/mikecovlee/tinymixtral-1B).
 
-The v2.0 beta (shared expert architecture, WSD schedule) is available at [mikecovlee/tinymixtral-v2.0-beta](https://huggingface.co/mikecovlee/tinymixtral-v2.0-beta).
-
-The legacy v1 model (C4 pretrain) has been moved to [mikecovlee/tinymixtral-v1.0](https://huggingface.co/mikecovlee/tinymixtral-v1.0).
+Earlier smaller models:
+- [mikecovlee/tinymixtral](https://huggingface.co/mikecovlee/tinymixtral) — v1.1, SmolLM blend (~432M)
+- [mikecovlee/tinymixtral-v2.0-beta](https://huggingface.co/mikecovlee/tinymixtral-v2.0-beta) — shared-expert variant (~498M)
+- [mikecovlee/tinymixtral-v1.0](https://huggingface.co/mikecovlee/tinymixtral-v1.0) — legacy C4 pretrain
 
 ## Model Architecture
 
 | Parameter | Value |
 |-----------|-------|
-| hidden_size | 896 |
-| num_layers | 10 |
-| Attention | Grouped Query Attention (14 heads / 2 KV heads) |
+| hidden_size | 1024 |
+| num_layers | 16 |
+| Attention | Grouped Query Attention (16 heads / 4 KV heads) |
 | Head dim | 64 |
 | RoPE theta | 1,000,000 |
 | Norm | RMSNorm |
-| Experts | 6 (top-2 routing) |
-| Expert FFN | SwiGLU, intermediate = 2389 (8/3 × hidden_size) |
+| Experts | 8 routed (top-2) |
+| Expert FFN | SwiGLU, intermediate = 2816 |
 | Vocab size | 32,000 |
 | Max position | 2,048 |
-| **Total params** | **~432M** |
-| **Active params** | **~176M** |
+| **Total params** | **~1.18B** |
+| **Active params** | **~352M** |
 
 ## Hardware & Environment
 
-- GPU: NVIDIA RTX A5000 24GB
+- GPU: NVIDIA RTX PRO 4500 Blackwell 32GB
 - CPU: AMD Ryzen 7 5800X
 - RAM: 32GB
 
@@ -295,16 +297,16 @@ The original model trained on C4-en (noisy web text). We ran an ablation replaci
 
 | Task | Metric | v1.1 (432M) | v2.0 beta (498M) | 1B MoE (1182M) | 1B MoE 8B (1182M) | SmolLM2-360M | Qwen3-0.6B |
 |------|--------|:---:|:---:|:---:|:---:|:---:|:---:|
-| HellaSwag | acc_norm | 0.308 | 0.326 | 0.311 | 0.329 | **0.563** | 0.473 |
-| PIQA | acc | 0.616 | 0.631 | 0.620 | 0.630 | **0.719** | 0.673 |
-| WinoGrande | acc | 0.524 | 0.506 | 0.510 | 0.523 | **0.587** | 0.563 |
-| ARC-Easy | acc | 0.456 | 0.474 | 0.463 | 0.479 | **0.705** | 0.609 |
-| ARC-Challenge | acc_norm | 0.247 | 0.272 | **0.273** | 0.279 | 0.383 | 0.340 |
-| OpenBookQA | acc_norm | 0.288 | 0.290 | 0.288 | 0.306 | **0.372** | 0.316 |
-| BoolQ | acc | 0.606 | 0.455 | 0.548 | 0.620 | 0.620 | **0.643** |
-| LAMBADA | acc | 0.227 | 0.224 | 0.200 | 0.234 | **0.532** | 0.401 |
+| HellaSwag | acc_norm | 0.308 | 0.326 | 0.311 | **0.329** | 0.563 | 0.473 |
+| PIQA | acc | 0.616 | **0.631** | 0.620 | 0.630 | 0.719 | 0.673 |
+| WinoGrande | acc | **0.524** | 0.506 | 0.510 | 0.523 | 0.587 | 0.563 |
+| ARC-Easy | acc | 0.456 | 0.474 | 0.463 | **0.479** | 0.705 | 0.609 |
+| ARC-Challenge | acc_norm | 0.247 | 0.272 | 0.273 | **0.279** | 0.383 | 0.340 |
+| OpenBookQA | acc_norm | 0.288 | 0.290 | 0.288 | **0.306** | 0.372 | 0.316 |
+| BoolQ | acc | 0.606 | 0.455 | 0.548 | **0.620** | 0.620 | 0.643 |
+| LAMBADA | acc | 0.227 | 0.224 | 0.200 | **0.234** | 0.532 | 0.401 |
 
-All numbers measured locally with identical settings (lm-eval-harness v0.4.12, 0-shot, cuda, bf16). Batch size does not affect log-likelihood evaluation results.
+All numbers measured locally with identical settings (lm-eval-harness v0.4.12, 0-shot, cuda, bf16). Batch size does not affect log-likelihood evaluation results. **Bold = best among the TinyMixtral variants**; SmolLM2-360M / Qwen3-0.6B are shown for reference only.
 
 **Few-shot (1B MoE, lm-eval-harness):** HellaSwag 10-shot acc_norm 0.312 · WinoGrande 5-shot acc 0.524 · ARC-Easy 25-shot acc_norm 0.468 · ARC-Challenge 25-shot acc_norm 0.262
 
