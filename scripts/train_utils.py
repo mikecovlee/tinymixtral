@@ -2,7 +2,7 @@
 # Open-source under the MIT License. See LICENSE for details.
 """train.py 和 resume.py 共享的训练逻辑。"""
 
-import math, sys, time, os, shutil, subprocess, json, signal
+import math, sys, time, os, shutil, signal
 from pathlib import Path
 
 import torch
@@ -226,42 +226,9 @@ def make_wsd_schedule(opt, warmup_steps, total_steps, decay_ratio=0.1):
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
-# ============================================================
-# CPU eval 子进程
-# ============================================================
-
-def run_cpu_eval(checkpoint_path, eval_dir):
-    """子进程 CPU GLUE eval。"""
-    script = Path(__file__).parent / "eval_glue.py"
-    output = Path(eval_dir) / "summary.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tokenizer_path = Path(__file__).parent.parent / "tokenizer"
-    # 删除旧结果，防止子进程失败时误读
-    if output.exists():
-        output.unlink()
-    cmd = [sys.executable, str(script),
-           "--checkpoint", checkpoint_path, "--tokenizer", str(tokenizer_path),
-           "--tasks", "sst2,mrpc,qnli,rte,cola", "--limit", "200",
-           "--batch-size", "2", "--max-length", "256",
-           "--device", "cpu", "--precision", "fp32",
-           "--output", str(output), "--seed", "1234"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        if r.returncode != 0:
-            stderr_tail = r.stderr.strip()[-500:] if r.stderr else "(empty)"
-            print(f"  [eval err] exit={r.returncode} stderr={stderr_tail}", flush=True)
-            return None, None  # 失败后不读旧结果
-        if output.exists():
-            with open(output) as f: d = json.load(f)
-            return d.get("aggregate", {}).get("mean_score"), d.get("results", {})
-    except Exception as e:
-        print(f"  [eval err] {e}", flush=True)
-    return None, None
-
-
 def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                   output_dir, max_steps, save_every_min, log_every, step_start=0,
-                  schedule_args=None, eval_on_save=False,
+                  schedule_args=None,
                   keep_last_checkpoints=5):
     """按绝对 step 目标训练。
 
@@ -366,14 +333,6 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                 prune_periodic_checkpoints(output_dir, keep_last_checkpoints)
                 last_save = time.time()
                 last_saved_step = step
-
-                if eval_on_save:
-                    eval_dir = f"evals/{Path(output_dir).name}/step_{step:07d}"
-                    mean, res = run_cpu_eval(d, eval_dir)
-                    if mean is not None and res:
-                        parts = [f'{t}={r.get("accuracy", r.get("matthews_correlation", r.get("f1", float("nan")))):.3f}'
-                                 for t, r in sorted(res.items())]
-                        print(f"  [eval] mean={mean:.4f} | {' '.join(parts)}", flush=True)
 
             if stop_signal is not None:
                 if last_saved_step == step:

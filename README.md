@@ -157,19 +157,23 @@ Key differences from pretraining:
 
 ### Evaluation
 
-```bash
-# GLUE (8 tasks)
-python scripts/eval_glue.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
-  --tokenizer tokenizer/ --tasks all --limit 500 --batch-size 16
+All reported benchmark numbers use [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) (v0.4.x) with conditional log-likelihood scoring. Publish the checkpoint first (`scripts/publish_hf.py`), then evaluate:
 
-# ARC (0-shot + 5-shot)
-python scripts/eval_arc.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
-  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 0
-python scripts/eval_arc.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final \
-  --tokenizer tokenizer/ --tasks arc_c,arc_e --shots 5
+```bash
+# lm-eval harness 0-shot (standard 8-task suite)
+lm_eval --model hf \
+  --model_args "pretrained=publish/,tokenizer=tokenizer/,trust_remote_code=True,dtype=bfloat16" \
+  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai \
+  --batch_size 16 --device cuda --output_path evals/harness_0shot
+
+# IFEval (instruction following, generative)
+lm_eval --model hf \
+  --model_args "pretrained=publish/,tokenizer=tokenizer/,trust_remote_code=True,dtype=bfloat16" \
+  --tasks ifeval --apply_chat_template --batch_size 8 --device cuda \
+  --output_path evals/ifeval_publish
 ```
 
-Zero-shot evaluation uses conditional log-likelihood scoring over answer spans. Supported GLUE tasks: `sst2`, `mrpc`, `qqp`, `qnli`, `rte`, `cola`, `mnli`, `mnli_mismatched`.
+For few-shot variants, append `--num_fewshot N` (e.g. HellaSwag 10-shot, WinoGrande 5-shot, ARC 25-shot).
 
 ## Publishing to HuggingFace
 
@@ -230,16 +234,11 @@ tinymixtral/
 ├── hf/                             # HuggingFace compatibility layer
 │   ├── configuration_tinymixtral.py  # PretrainedConfig subclass
 │   └── modeling_tinymixtral.py     # PreTrainedModel subclass
-├── evals/                          # Evaluation framework
-│   ├── prompt_scoring.py           # Conditional log-likelihood scoring
-│   ├── glue_tasks.py               # 8 GLUE task definitions + templates
-│   └── metrics.py                  # Accuracy, F1, Matthews correlation
+├── evals/                          # Evaluation output/results (harness, IFEval, …)
 ├── scripts/
 │   ├── train.py                    # Training entry point
 │   ├── resume.py                   # Checkpoint resume
 │   ├── train_utils.py              # Shared training logic
-│   ├── eval_glue.py                # GLUE evaluation CLI
-│   ├── eval_arc.py                 # ARC evaluation CLI (zero/few-shot)
 │   ├── chat.py                     # Interactive chat (native model)
 │   ├── chat_hf.py                  # Interactive chat (HF AutoModel)
 │   ├── publish_hf.py               # HF-format export
@@ -247,7 +246,7 @@ tinymixtral/
 │   ├── prepare_tokenizer.py        # Tokenizer download / training
 │   ├── mix_data.py                 # Interleave shards from multiple datasets
 │   ├── benchmark.py                # GPU memory/throughput profiler
-│   └── search.py                   # Hyperparameter search
+│   └── eval_summarization.py       # SAMSum summarization evaluation (ROUGE)
 ├── shared_expert/                  # Architecture ablation: shared expert variant
 │   ├── model/                      # v2 model code (1 shared + 6 routed experts)
 │   ├── hf/                         # v2 HF compatibility layer
@@ -287,55 +286,66 @@ The original model trained on C4-en (noisy web text). We ran an ablation replaci
 | Pretrain (C4) | C4-en | 3e-4 | 4B | 177,557 | 77.1 h | 3.0 |
 | Pretrain (SmolLM) | FineWeb-Edu + Cosmopedia v2 (89:11) | 7e-4 | 4B | 162,761 | 83.6 h | 2.5 |
 | Post-train | Wiki + Cosmopedia v2 (50:50) | 2e-5 | 1B | 40,691 | 20.5 h | 2.5 |
+| 1B MoE (v1b_moe) | SmolLM blend (89:11) | 7e-4 | 4B | 244,141 | ~102.5 h | 1.9* |
+| 1B MoE 续训 (v1b_moe_cont) | smollm_blend2（非重叠新段 89:11）| 4.2e-4 | 4B | 121,921 | 60.4 h | 1.80 |
+
+*Decay-phase loss plateaued at ~1.9 then spiked to 3.4 in the final ~300 steps as the data stream wrapped back to the start of the corpus (shard 0).
 
 ### Standard Benchmarks (lm-evaluation-harness, 0-shot)
 
-| Task | Metric | v1.1 (432M) | v2.0 beta (498M) | SmolLM2-360M | Qwen3-0.6B |
-|------|--------|:---:|:---:|:---:|:---:|
-| HellaSwag | acc_norm | 0.308 | 0.326 | **0.563** | 0.473 |
-| PIQA | acc | 0.616 | 0.631 | **0.719** | 0.673 |
-| WinoGrande | acc | 0.524 | 0.506 | **0.587** | 0.563 |
-| ARC-Easy | acc | 0.456 | 0.474 | **0.705** | 0.609 |
-| ARC-Challenge | acc_norm | 0.247 | 0.272 | **0.383** | 0.340 |
-| OpenBookQA | acc_norm | 0.288 | 0.290 | **0.372** | 0.316 |
-| BoolQ | acc | 0.606 | 0.455 | 0.620 | **0.643** |
-| LAMBADA | acc | 0.227 | 0.224 | **0.532** | 0.401 |
+| Task | Metric | v1.1 (432M) | v2.0 beta (498M) | 1B MoE (1182M) | 1B MoE 8B (1182M) | SmolLM2-360M | Qwen3-0.6B |
+|------|--------|:---:|:---:|:---:|:---:|:---:|:---:|
+| HellaSwag | acc_norm | 0.308 | 0.326 | 0.311 | 0.329 | **0.563** | 0.473 |
+| PIQA | acc | 0.616 | 0.631 | 0.620 | 0.630 | **0.719** | 0.673 |
+| WinoGrande | acc | 0.524 | 0.506 | 0.510 | 0.523 | **0.587** | 0.563 |
+| ARC-Easy | acc | 0.456 | 0.474 | 0.463 | 0.479 | **0.705** | 0.609 |
+| ARC-Challenge | acc_norm | 0.247 | 0.272 | **0.273** | 0.279 | 0.383 | 0.340 |
+| OpenBookQA | acc_norm | 0.288 | 0.290 | 0.288 | 0.306 | **0.372** | 0.316 |
+| BoolQ | acc | 0.606 | 0.455 | 0.548 | 0.620 | 0.620 | **0.643** |
+| LAMBADA | acc | 0.227 | 0.224 | 0.200 | 0.234 | **0.532** | 0.401 |
 
 All numbers measured locally with identical settings (lm-eval-harness v0.4.12, 0-shot, cuda, bf16). Batch size does not affect log-likelihood evaluation results.
 
-SmolLM2-360M trained on 4T tokens; Qwen3-0.6B trained on 36T tokens. TinyMixtral trained on 4B tokens (~1000× less) on a single consumer GPU. The performance gap is primarily a data budget difference. v2.0 beta improves over v1.1 on most tasks (HellaSwag +1.8pp, PIQA +1.5pp, ARC-C +2.5pp) but regresses on BoolQ.
+**Few-shot (1B MoE, lm-eval-harness):** HellaSwag 10-shot acc_norm 0.312 · WinoGrande 5-shot acc 0.524 · ARC-Easy 25-shot acc_norm 0.468 · ARC-Challenge 25-shot acc_norm 0.262
 
-### GLUE (zero-shot)
+SmolLM2-360M trained on 4T tokens; Qwen3-0.6B trained on 36T tokens. TinyMixtral trained on 4–8B tokens (~500–1000× less) on a single consumer GPU. The performance gap is primarily a data budget difference. v2.0 beta improves over v1.1 on most tasks (HellaSwag +1.8pp, PIQA +1.5pp, ARC-C +2.5pp) but regresses on BoolQ.
 
-| Task | Metric | C4 4B | SmolLM 4B | + Post-train (5B) |
-|------|--------|:---:|:---:|:---:|
-| SST2 | accuracy | 0.470 | 0.556 | **0.568** |
-| MRPC | accuracy / f1 | 0.338 / 0.069 | 0.686 / 0.813 | 0.686 / 0.813 |
-| QQP | accuracy / f1 | 0.470 / 0.412 | 0.350 / 0.519 | 0.350 / 0.519 |
-| QNLI | accuracy | 0.494 | 0.460 | 0.458 |
-| RTE | accuracy | 0.520 | 0.527 | **0.534** |
-| MNLI | accuracy | 0.348 | 0.350 | **0.352** |
-| MNLI-mm | accuracy | 0.368 | 0.366 | 0.364 |
-| **Mean** | — | 0.383 | 0.513 | **0.515** |
+**Continuation (4B → 8B):** the 8B column is the same 1182M MoE continued on a new, non-overlapping 4B of the same data recipe. Doubling pretrain tokens improved **every** harness task, with the largest gains on BoolQ (+7.2pp) and LAMBADA (+3.5pp); mean 0-shot rose ~+2.3pp (0.402 → 0.425).
 
-The data quality switch (C4 → SmolLM blend) drove the major improvement (+34% GLUE mean). Post-training on Wiki + Cosmopedia produced marginal gains (GLUE mean +0.002), suggesting that at 432M scale, 4B tokens of high-quality pretrain data already saturates the model's capacity.
+### 1B MoE Post-training (negative result)
 
-### ARC
+We post-trained the 1B MoE from its lowest-loss pretrain checkpoint (step 243,038) with the v1.1 recipe (Wiki + Cosmopedia v2 50:50, 1B tokens, lr 2e-5, warmup 300, WSD schedule, 60,975 steps, ~26 h). Training loss fell 2.98 → 1.8, but **downstream performance (lm-eval-harness 0-shot) was unchanged**:
 
-| Task | C4 4B | SmolLM 4B | + Post-train (5B) |
-|------|:---:|:---:|:---:|
-| ARC-C 0-shot | 0.220 | **0.256** | 0.249 |
-| ARC-C 5-shot | 0.223 | **0.259** | 0.254 |
-| ARC-E 0-shot | 0.311 | 0.356 | **0.365** |
-| ARC-E 5-shot | 0.320 | 0.362 | **0.368** |
+| Task | Pretrain (4B) | Post-train (5B) |
+|------|:---:|:---:|
+| HellaSwag (acc_norm) | 0.311 | 0.313 |
+| PIQA (acc) | 0.620 | 0.623 |
+| WinoGrande (acc) | 0.510 | 0.505 |
+| ARC-Easy (acc) | 0.463 | 0.465 |
+| ARC-Challenge (acc_norm) | 0.273 | 0.272 |
+| OpenBookQA (acc_norm) | 0.288 | 0.290 |
+| BoolQ (acc) | 0.548 | 0.528 |
+| LAMBADA (acc) | 0.200 | 0.195 |
 
-ARC improved consistently from data quality alone (+3–4pp). Post-training nudged ARC-E slightly higher but regressed ARC-C marginally — net neutral.
+All changes are within evaluation noise (±0.02). At this scale, low-LR post-training on a knowledge blend lowers the loss but does not transfer to task ability.
+
+### Instruction Following (IFEval)
+
+IFEval (instruction-level loose accuracy) via lm-eval-harness with `--apply_chat_template`:
+
+| Model | IFEval inst-level loose |
+|-------|:---:|
+| 1B MoE 4B | 0.222 |
+| 1B MoE 5B (post-train) | 0.234 |
+| 1B MoE 8B (continuation) | 0.221 |
+
+Instruction-following stays essentially flat (~0.22) across pretraining and continued pretraining — more pretraining tokens do not improve it, consistent with the common finding that instruction-following requires targeted SFT rather than more LM pretraining.
 
 ### Key Finding
 
-Switching from C4 to a curated high-quality blend (FineWeb-Edu + Cosmopedia v2) improved GLUE mean by **34%** (+0.130) at the same 4B token budget. The largest gain came from MRPC (paraphrase detection), which went from random guessing to 0.813 F1 — proving that small MoE models can learn meaningful language understanding given clean data. Post-training with domain-specific data provides negligible additional benefit at this scale, indicating that the pretrain data recipe is the dominant factor for model quality.
+The reliable signal across TinyMixtral variants is the lm-eval-harness suite. The C4 → SmolLM data-quality switch improved the knowledge/multiple-choice tasks (e.g. ARC-C/Easy +3–4pp). Doubling the 1B MoE's pretrain tokens (4B → 8B, same data recipe) improved **every** harness task (+2.3pp mean 0-shot), most notably BoolQ and LAMBADA. However, neither post-training nor continued pretraining moves instruction-following (IFEval ≈ 0.22) — at ~1.2B params, knowledge grows with more pretrain data, while instruction-following requires targeted SFT.
 
-All evaluations use conditional log-likelihood scoring over answer spans, identical settings for fair comparison (`--limit 500 --batch-size 16 --max-length 512`).
+ARC-C / ARC-Easy (0-shot) are covered by the `arc_challenge` / `arc_easy` rows in the harness table above.
 
 ---
 
@@ -376,29 +386,25 @@ python shared_expert/scripts/resume.py --checkpoint-dir checkpoints/v2 \
 
 ### Results
 
-| Task | Baseline (v1.1) | Shared Expert pretrain | Shared Expert post-train |
-|------|:---:|:---:|:---:|
-| SST2 | 0.568 | 0.518 | **0.586** |
-| MRPC F1 | **0.813** | 0.811 | 0.809 |
-| QQP F1 | 0.519 | 0.519 | 0.519 |
-| QNLI | 0.458 | 0.458 | 0.458 |
-| RTE | **0.534** | 0.520 | 0.520 |
-| MNLI | **0.352** | 0.348 | 0.348 |
-| MNLI-mm | 0.364 | 0.368 | **0.368** |
-| **GLUE Mean** | 0.513 | 0.505 | **0.515** |
-| ARC-C 0-shot | 0.249 | **0.265** | 0.264 |
-| ARC-C 5-shot | 0.254 | 0.256 | **0.259** |
-| ARC-E 0-shot | 0.365 | 0.384 | **0.388** |
-| ARC-E 5-shot | 0.368 | 0.379 | **0.387** |
+lm-eval-harness 0-shot (see the main benchmark table above; "v2.0 beta" is this shared-expert variant):
+
+| Task | Metric | Baseline (v1.1, 432M) | Shared Expert (v2.0, 498M) |
+|------|--------|:---:|:---:|
+| HellaSwag | acc_norm | 0.308 | **0.326** |
+| PIQA | acc | 0.616 | **0.631** |
+| WinoGrande | acc | **0.524** | 0.506 |
+| ARC-Easy | acc | 0.456 | **0.474** |
+| ARC-Challenge | acc_norm | 0.247 | **0.272** |
+| OpenBookQA | acc_norm | 0.288 | **0.290** |
+| BoolQ | acc | **0.606** | 0.455 |
+| LAMBADA | acc | **0.227** | 0.224 |
 
 ### Conclusion
 
 The shared expert variant does **not** provide substantial improvement over the baseline at this scale:
 
-- GLUE mean is within evaluation noise (0.515 vs 0.513, +0.002)
-- ARC improves consistently (+1–2pp), suggesting better knowledge capacity
-- SST2 improves after post-train (+6.8pp vs baseline post-train), but other GLUE tasks are flat or slightly worse
-- Total params increase 15% (432M→498M) for marginal gains
+- Harness results are mixed: v2.0 improves HellaSwag / ARC (+1.5–2.5pp) but sharply regresses BoolQ (−15pp)
+- Total params increase 15% (432M→498M) for marginal, inconsistent gains
 
 At ~241M active parameters, the MoE routing overhead and representational fragmentation outweigh the knowledge capacity benefit. The shared expert design is more likely to pay off at 1B+ active params (cf. DeepSeek, Mixtral). The baseline v1.1 architecture remains the recommended model.
 
@@ -482,22 +488,20 @@ python scripts/resume.py \
 
 ### Results
 
-| Task | Metric | Pretrain (C4 4B) | Post-train (+1B, 5B total) |
-|------|--------|:---:|:---:|
-| SST2 | accuracy | 0.470 | 0.554 |
-| MRPC | accuracy / f1 | 0.338 / 0.069 | 0.706 / 0.815 |
-| QQP | accuracy / f1 | 0.470 / 0.412 | 0.530 / 0.342 |
-| QNLI | accuracy | 0.494 | 0.452 |
-| RTE | accuracy | 0.520 | 0.484 |
-| MNLI | accuracy | 0.348 | 0.348 |
-| MNLI-mm | accuracy | 0.368 | 0.368 |
-| **GLUE Mean** | — | 0.383 | 0.480 |
-| ARC-C 0-shot | accuracy | 0.220 | 0.233 |
-| ARC-C 5-shot | accuracy | 0.223 | 0.246 |
-| ARC-E 0-shot | accuracy | 0.311 | 0.342 |
-| ARC-E 5-shot | accuracy | 0.320 | 0.348 |
+lm-eval-harness 0-shot on the released `v1.0` checkpoint ([mikecovlee/tinymixtral-v1.0](https://huggingface.co/mikecovlee/tinymixtral-v1.0), C4-pretrained, ~432M):
 
-Post-training improved GLUE mean from 0.383 to 0.480, with the largest gain on MRPC (F1: 0.069 → 0.815). ARC improved modestly (+1–3 pp). These v1 results serve as the baseline for the data quality ablation documented above.
+| Task | Metric | v1.0 (C4 4B) |
+|------|--------|:---:|
+| HellaSwag | acc_norm | 0.310 |
+| PIQA | acc | 0.613 |
+| WinoGrande | acc | 0.508 |
+| ARC-Easy | acc | 0.422 |
+| ARC-Challenge | acc_norm | 0.247 |
+| OpenBookQA | acc_norm | 0.308 |
+| BoolQ | acc | 0.579 |
+| LAMBADA | acc | 0.240 |
+
+These serve as the (weak) baseline for the data-quality ablation documented above.
 
 ## License
 
