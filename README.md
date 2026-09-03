@@ -46,6 +46,8 @@ Earlier smaller models:
 - CPU: AMD Ryzen 7 5800X
 - RAM: 32GB
 
+The model also runs on 24 GB cards such as the RTX A5000 — just lower the batch size (this 1B MoE uses ~12–16 GB at `--batch-size 16`).
+
 ```bash
 conda create -n tinymixtral python=3.13 -y
 conda activate tinymixtral
