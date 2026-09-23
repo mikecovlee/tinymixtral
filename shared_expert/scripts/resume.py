@@ -34,8 +34,6 @@ def main():
                    help="LR schedule: cosine or wsd (Warmup-Stable-Decay)")
     p.add_argument("--bf16-optim", action="store_true",
                    help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
-    p.add_argument("--eval-on-save", action="store_true",
-                   help="每次保存后同步执行 CPU GLUE 评测")
     args = p.parse_args()
     if args.batch_size <= 0 or args.seq_len <= 0:
         p.error("batch-size and seq-len must be positive")
@@ -192,7 +190,6 @@ def main():
         output_dir=output_dir, max_steps=total_steps,
         save_every_min=args.save_every_min, log_every=args.log_every,
         step_start=step_done, schedule_args=schedule_args,
-        eval_on_save=args.eval_on_save,
         keep_last_checkpoints=args.keep_last_checkpoints,
     )
 

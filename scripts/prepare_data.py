@@ -34,6 +34,8 @@ def main():
                         help="最大处理样本数")
     target.add_argument("--max-tokens", type=int, default=None,
                         help="最大写入 token 数")
+    p.add_argument("--skip-tokens", type=int, default=0,
+                   help="从数据集开头跳过指定 token 数（获取非重叠数据）")
     p.add_argument("--shard-size", type=int, default=100_000_000,
                    help="每个 shard 的 token 数（int64 默认约 800MB）")
     p.add_argument("--force", action="store_true",
@@ -99,6 +101,7 @@ def main():
         total_tokens = 0
         count = 0
         t0 = time.time()
+        skip_remaining = args.skip_tokens
 
         for ex in ds:
             text = ex.get("text", "")
@@ -106,6 +109,16 @@ def main():
                 continue
             ids = tokenizer.encode(text, add_special_tokens=False)
             ids.append(tokenizer.eos_token_id)
+
+            # 跳过前 skip_tokens 个 token（获取非重叠数据）
+            if skip_remaining > 0:
+                if len(ids) <= skip_remaining:
+                    skip_remaining -= len(ids)
+                    continue
+                else:
+                    ids = ids[skip_remaining:]
+                    skip_remaining = 0
+
             if args.max_tokens is not None:
                 remaining = args.max_tokens - total_tokens
                 if remaining <= 0:
@@ -135,8 +148,13 @@ def main():
                 break
 
         if args.max_tokens is not None and total_tokens != args.max_tokens:
-            raise RuntimeError(
-                f"Dataset ended after {total_tokens} tokens, before target {args.max_tokens}"
+            print(
+                f"WARNING: dataset ended after {total_tokens:,} tokens, "
+                f"target was {args.max_tokens:,} "
+                f"({total_tokens / args.max_tokens * 100:.1f}%). "
+                f"Continuing with available data; check training handles the "
+                f"short dataset (it will warn and save on exhaustion).",
+                flush=True,
             )
 
         if buf:

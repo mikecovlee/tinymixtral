@@ -2,7 +2,7 @@
 # Open-source under the MIT License. See LICENSE for details.
 """train.py 和 resume.py 共享的训练逻辑。"""
 
-import math, sys, time, os, shutil, subprocess, json, signal
+import math, sys, time, os, shutil, signal
 from pathlib import Path
 
 import torch
@@ -226,46 +226,56 @@ def make_wsd_schedule(opt, warmup_steps, total_steps, decay_ratio=0.1):
     return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
 
-# ============================================================
-# CPU eval 子进程
-# ============================================================
+def make_val_evaluator(val_files, bs, seq, max_tokens, device="cuda"):
+    """构建 val 集困惑度评估回调：eval_fn(model) -> dict 或 None。"""
+    if not val_files:
+        return None
+    chunk = (seq + 1) * bs
+    n_batches = max(1, max_tokens // chunk)
 
-def run_cpu_eval(checkpoint_path, eval_dir):
-    """子进程 CPU GLUE eval。"""
-    script = Path(__file__).parent / "eval_glue.py"
-    output = Path(eval_dir) / "summary.json"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tokenizer_path = Path(__file__).parent.parent / "tokenizer"
-    # 删除旧结果，防止子进程失败时误读
-    if output.exists():
-        output.unlink()
-    cmd = [sys.executable, str(script),
-           "--checkpoint", checkpoint_path, "--tokenizer", str(tokenizer_path),
-           "--tasks", "sst2,mrpc,qnli,rte,cola", "--limit", "200",
-           "--batch-size", "2", "--max-length", "256",
-           "--device", "cpu", "--precision", "fp32",
-           "--output", str(output), "--seed", "1234"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        if r.returncode != 0:
-            stderr_tail = r.stderr.strip()[-500:] if r.stderr else "(empty)"
-            print(f"  [eval err] exit={r.returncode} stderr={stderr_tail}", flush=True)
-            return None, None  # 失败后不读旧结果
-        if output.exists():
-            with open(output) as f: d = json.load(f)
-            return d.get("aggregate", {}).get("mean_score"), d.get("results", {})
-    except Exception as e:
-        print(f"  [eval err] {e}", flush=True)
-    return None, None
+    def eval_fn(model):
+        was_training = model.training
+        model.eval()
+        losses, seen = [], 0
+        try:
+            with torch.no_grad():
+                for path in val_files:
+                    shard = torch.load(path, weights_only=True, mmap=True)
+                    pos = 0
+                    while seen < n_batches and pos + chunk <= len(shard):
+                        batch = shard[pos:pos + chunk].view(bs, seq + 1).to(device)
+                        amp = "cuda" if str(device).startswith("cuda") else "cpu"
+                        with torch.amp.autocast(amp, dtype=torch.bfloat16):
+                            out = model(batch[:, :-1], labels=batch[:, 1:])
+                        ce = out["ce_loss"] if out.get("ce_loss") is not None else out["loss"]
+                        losses.append(ce.float().item())
+                        seen += 1
+                        pos += chunk
+                    del shard
+                    if seen >= n_batches:
+                        break
+        finally:
+            if was_training:
+                model.train()
+        if not losses:
+            return None
+        mean_loss = sum(losses) / len(losses)
+        return {"val_loss": mean_loss, "val_ppl": math.exp(mean_loss),
+                "val_batches": len(losses)}
+
+    return eval_fn
 
 
 def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                   output_dir, max_steps, save_every_min, log_every, step_start=0,
-                  schedule_args=None, eval_on_save=False,
-                  keep_last_checkpoints=5):
+                  schedule_args=None,
+                  keep_last_checkpoints=5,
+                  eval_fn=None, eval_every=0, device="cuda"):
     """按绝对 step 目标训练。
 
     schedule_args: 可选 dict with warmup_steps, total_steps，用于 checkpoint 恢复。
+    eval_fn: 可选回调 eval_fn(model) -> dict（val 集指标），每 eval_every 步调用。
+    device: batch 搬运目标设备（测试可用 "cpu"）。
     """
     os.makedirs(output_dir, exist_ok=True)
     shard = torch.load(files[fi], weights_only=True)
@@ -296,35 +306,42 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
 
             # ---- 分片循环 ----
             if ptr + chunk > len(shard):
+                if fi + 1 >= len(files):
+                    print(f"  WARNING: Training data exhausted at step {step+1} "
+                          f"(shard {fi}/{len(files)-1}, ptr {ptr})", flush=True)
+                    print(f"  WARNING: Reached dataset end before target {max_steps} steps "
+                          f"({total_tok:,}/{max_steps*bs*seq:,} tokens consumed)", flush=True)
+                    print(f"  WARNING: Check --max-tokens vs dataset size, or provide more data. "
+                          f"Saving final checkpoint and exiting.", flush=True)
+                    break
+                fi += 1
                 ptr = 0
-                for _ in range(len(files)):
-                    fi = (fi + 1) % len(files)
-                    del shard
-                    shard = torch.load(files[fi], weights_only=True)
-                    if len(shard) >= chunk:
-                        break
-                else:
-                    raise RuntimeError(f"No shard contains at least {chunk} tokens")
+                del shard
+                shard = torch.load(files[fi], weights_only=True)
+                if len(shard) < chunk:
+                    raise RuntimeError(f"Shard {fi} contains only {len(shard)} tokens (< {chunk})")
 
             batch = shard[ptr:ptr + chunk]
             if batch.numel() != chunk:
                 print(f"  WARN: short read {batch.numel()}/{chunk} shard={fi}", flush=True)
+                if fi + 1 >= len(files):
+                    print(f"  WARNING: Training data exhausted at step {step+1}; "
+                          f"saving final checkpoint and exiting.", flush=True)
+                    break
+                fi += 1
                 ptr = 0
-                for _ in range(len(files)):
-                    fi = (fi + 1) % len(files)
-                    del shard
-                    shard = torch.load(files[fi], weights_only=True)
-                    if len(shard) >= chunk:
-                        break
-                else:
-                    raise RuntimeError(f"No shard contains at least {chunk} tokens")
+                del shard
+                shard = torch.load(files[fi], weights_only=True)
+                if len(shard) < chunk:
+                    raise RuntimeError(f"Shard {fi} contains only {len(shard)} tokens (< {chunk})")
                 continue
 
-            batch = batch.view(bs, seq + 1).to("cuda", non_blocking=True)
+            batch = batch.view(bs, seq + 1).to(device, non_blocking=True)
             ptr += chunk
             total_tok += bs * seq
 
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            amp_device = "cuda" if str(device).startswith("cuda") else "cpu"
+            with torch.amp.autocast(amp_device, dtype=torch.bfloat16):
                 out = model(batch[:, :-1], labels=batch[:, 1:])
             if not torch.isfinite(out["loss"]):
                 opt.zero_grad(set_to_none=True)
@@ -342,12 +359,30 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
             if step % log_every == 0:
                 elapsed = time.time() - t0
                 hours_elapsed = elapsed / 3600
+                ce = out.get("ce_loss")
+                ce_str = f"ce={ce.item():.4f} " if ce is not None else ""
+                util = model.expert_utilization() if hasattr(model, "expert_utilization") else None
+                util_str = ""
+                if util:
+                    parts = " ".join(f"{p * 100:.1f}" for p in util)
+                    util_str = (f"util%=[{parts}] "
+                                f"min={min(util) * 100:.1f} max={max(util) * 100:.1f} ")
                 print(f"  step {step:7d}: loss={out['loss'].item():.4f} "
+                      f"{ce_str}"
                       f"aux={out['aux_loss'].item():.1f} "
+                      f"{util_str}"
                       f"tok/s={(total_tok - tok_base) / elapsed:.0f} "
                       f"lr={sched.get_last_lr()[0]:.2e} "
                       f"shard={fi}/{len(files)} "
                       f"[{hours_elapsed:.1f}h]", flush=True)
+
+            if eval_fn is not None and eval_every > 0 and step % eval_every == 0:
+                metrics = eval_fn(model)
+                if metrics:
+                    print(f"  [eval] step {step:7d}: "
+                          f"val_loss={metrics['val_loss']:.4f} "
+                          f"val_ppl={metrics['val_ppl']:.2f} "
+                          f"({metrics['val_batches']} batches)", flush=True)
 
             # ---- 保存 + eval ----
             if time.time() - last_save > save_every_min * 60:
@@ -360,14 +395,6 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                 prune_periodic_checkpoints(output_dir, keep_last_checkpoints)
                 last_save = time.time()
                 last_saved_step = step
-
-                if eval_on_save:
-                    eval_dir = f"evals/{Path(output_dir).name}/step_{step:07d}"
-                    mean, res = run_cpu_eval(d, eval_dir)
-                    if mean is not None and res:
-                        parts = [f'{t}={r.get("accuracy", r.get("matthews_correlation", r.get("f1", float("nan")))):.3f}'
-                                 for t, r in sorted(res.items())]
-                        print(f"  [eval] mean={mean:.4f} | {' '.join(parts)}", flush=True)
 
             if stop_signal is not None:
                 if last_saved_step == step:

@@ -31,6 +31,7 @@ class TinyMixtralConfig:
 
     # 归一化 & 激活
     rms_norm_eps: float = 1e-6
+    use_qk_norm: bool = False  # QK-Norm: 对每个 attention head 的 q/k 做 RMSNorm（投影后、RoPE 前）
 
     # RoPE (Qwen2.5 同款 theta)
     rope_theta: float = 1_000_000.0

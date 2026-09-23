@@ -21,6 +21,7 @@ class TinyMixtralConfig(PretrainedConfig):
         expert_intermediate_size: int = 2389,
         router_aux_loss_coef: float = 0.01,
         router_jitter_noise: float = 0.01,
+        use_qk_norm: bool = False,
         rms_norm_eps: float = 1e-6,
         rope_theta: float = 1_000_000.0,
         attention_dropout: float = 0.0,
@@ -41,6 +42,7 @@ class TinyMixtralConfig(PretrainedConfig):
         self.expert_intermediate_size = expert_intermediate_size
         self.router_aux_loss_coef = router_aux_loss_coef
         self.router_jitter_noise = router_jitter_noise
+        self.use_qk_norm = use_qk_norm
         self.rms_norm_eps = rms_norm_eps
         self.rope_theta = rope_theta
         self.attention_dropout = attention_dropout

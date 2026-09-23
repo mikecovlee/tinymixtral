@@ -4,3 +4,13 @@ datasets>=3.0
 sentencepiece>=0.2
 tokenizers>=0.15
 scikit-learn>=1.3
+
+# Data preparation (bulk HF download helpers)
+requests>=2.31
+zstandard>=0.22
+
+# Testing
+pytest>=7
+
+# Evaluation (lm-evaluation-harness CLI used in README "Evaluation")
+lm-eval>=0.4.12
