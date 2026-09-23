@@ -37,3 +37,7 @@ results*.json
 
 # Publish
 publish*/
+
+# Agent/tooling state
+.omo/
+.codegraph/
