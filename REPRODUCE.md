@@ -48,7 +48,7 @@ normalize them to a single `text` column before `scripts/prepare_data_local.py` 
 
 | Version | Data | Sources |
 |---|---|---|
-| v3.0 | 8.05B tokens, four disjoint pools | FineWeb-Edu, DCLM web, Cosmopedia v2, code, math, Wikipedia (6-source blend) |
+| v3.0 | 8.05B tokens, four disjoint pools | FineWeb-Edu, DCLM web, Cosmopedia v2, code, math (OpenWebMath), Wikipedia (6-source blend) |
 | v1.1-1b | 8B (4B + 4B continuation) | FineWeb-Edu + Cosmopedia v2 (89:11) |
 | v2.0-beta | 4B (+1B post-train) | FineWeb-Edu + Cosmopedia v2 (89:11) |
 | v1.1 | 4B | FineWeb-Edu + Cosmopedia v2 (89:11) |
@@ -56,6 +56,18 @@ normalize them to a single `text` column before `scripts/prepare_data_local.py` 
 
 Exact dataset ids and commands are in each version card (`versions/<ver>/README.md`) and in the
 v3.0 card's "Reproduce the data pools" section.
+
+### Dataset sources
+
+| Source | HF id | Used by |
+|---|---|---|
+| FineWeb-Edu | [`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) (`sample-10BT`) | v3.0, v1.1-1b, v2.0-beta, v1.1, v1.0 post-train |
+| Cosmopedia v2 | [`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2) | v3.0, v1.1-1b, v2.0-beta, v1.1, v1.0 post-train |
+| DCLM | [`mlfoundations/dclm-baseline-1.0`](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) | v3.0 |
+| Code | [`nvidia/OpenCodeInstruct`](https://huggingface.co/datasets/nvidia/OpenCodeInstruct) | v3.0 |
+| Math | [`open-web-math/open-web-math`](https://huggingface.co/datasets/open-web-math/open-web-math) | v3.0 |
+| Wikipedia | [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) (`20231101.en`) | v3.0, v1.1-1b post-train, v2.0-beta post-train |
+| C4 | [`allenai/c4`](https://huggingface.co/datasets/allenai/c4) (`en`) | v1.0 pretrain |
 
 ## 3. Train
 

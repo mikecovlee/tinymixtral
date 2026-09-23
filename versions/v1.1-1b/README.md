@@ -32,7 +32,9 @@ Previous flagship (before v3.0). A wider sparse MoE: **~1.18B total / ~352M acti
 \* Decay-phase loss plateaued at ~1.9 then spiked to 3.4 in the final ~300 steps as the data
 stream wrapped back to the start of the corpus (shard 0).
 
-Data: FineWeb-Edu + Cosmopedia v2 (89:11), pre-tokenized to 100M-token `.pt` shards.
+Data: FineWeb-Edu ([`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), `sample-10BT`)
++ Cosmopedia v2 ([`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2)) (89:11),
+pre-tokenized to 100M-token `.pt` shards.
 
 ```bash
 python scripts/train.py --config versions/v1.1-1b/configs/v1b_moe.json \
@@ -94,7 +96,9 @@ Instruction-following stays flat (~0.22) — more pretraining tokens do not impr
 ## Post-training (negative result)
 
 Post-trained from the lowest-loss pretrain checkpoint (step 243,038) with the v1.1 recipe
-(Wiki + Cosmopedia v2 50:50, 1B tokens, lr 2e-5, warmup 300, WSD, 60,975 steps, ~26 h).
+(Wikipedia ([`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia), `20231101.en`) +
+Cosmopedia v2 ([`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2)) 50:50,
+1B tokens, lr 2e-5, warmup 300, WSD, 60,975 steps, ~26 h).
 Loss fell 2.98 → 1.8 but **downstream metrics were unchanged**:
 
 | Task | Pretrain (4B) | Post-train (5B) |

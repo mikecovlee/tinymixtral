@@ -42,7 +42,9 @@ python scripts/train.py --config versions/v1.0/configs/config.json \
 
 ## Post-train (1B tokens)
 
-Continue from the C4 checkpoint on higher-quality data (FineWeb-Edu + Cosmopedia v2, 50:50):
+Continue from the C4 checkpoint on higher-quality data: FineWeb-Edu
+([`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), `sample-10BT`)
++ Cosmopedia v2 ([`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2)), 50:50:
 
 | Parameter | Value |
 |-----------|-------|

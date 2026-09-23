@@ -22,6 +22,14 @@ with ~2.5× fewer parameters.
 Harness mean = lm-evaluation-harness v0.4.12, 0-shot, 8-task suite. See each card for full
 architecture tables, training recipes, per-task results and negative results.
 
+Dataset sources: [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) (`sample-10BT`),
+[Cosmopedia v2](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2),
+[DCLM](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0),
+[OpenCodeInstruct](https://huggingface.co/datasets/nvidia/OpenCodeInstruct) (code),
+[OpenWebMath](https://huggingface.co/datasets/open-web-math/open-web-math),
+[Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia) (`20231101.en`); v1.0 used
+[C4](https://huggingface.co/datasets/allenai/c4) (`en`).
+
 ## Benchmark Comparison
 
 0-shot, 8-task suite (`acc_norm` for HellaSwag / ARC-Challenge / OpenBookQA, `acc` otherwise).

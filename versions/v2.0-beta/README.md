@@ -40,6 +40,12 @@ python shared_expert/scripts/resume.py --checkpoint-dir checkpoints/v2 \
   --batch-size 22 --schedule wsd --save-every-min 60
 ```
 
+Data sources: pretrain blend `smollm_blend` = FineWeb-Edu
+([`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), `sample-10BT`) + Cosmopedia v2
+([`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2)) (mixed 36:4);
+post-train blend `knowledge_blend` = Wikipedia ([`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia),
+`20231101.en`) + Cosmopedia v2 (50:50).
+
 ## Results (lm-eval-harness, 0-shot)
 
 | Task | Metric | v1.1 (432M) | v2.0 (498M) |

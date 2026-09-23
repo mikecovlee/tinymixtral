@@ -85,9 +85,11 @@ python scripts/columns_to_text_parquet.py --input data/raw/r5_code \
 python scripts/prepare_data_local.py --input data/raw/r5_code_text --tokenizer tokenizer/ \
   --output data/pretrain/r5_code --max-tokens 1000000000 --force --workers 8
 
-# Math (~6%) — web-math corpus (columns url/text/date/metadata), same download route:
-#   download_parquets.py --repo <web-math> --subdir <files-dir> --output data/raw/r5_math
-#   prepare_data_local.py --input data/raw/r5_math --output data/pretrain/r5_math --max-tokens 500000000
+# Math (~6%) — OpenWebMath (columns url/text/date/metadata), same download route:
+python scripts/download_parquets.py --repo open-web-math/open-web-math --subdir data \
+  --output data/raw/r5_math --workers 4
+python scripts/prepare_data_local.py --input data/raw/r5_math --tokenizer tokenizer/ \
+  --output data/pretrain/r5_math --max-tokens 500000000 --force --workers 8
 ```
 
 > Conventions: `download_parquets.py` / `zst_jsonl_to_parquet.py` emit `<name>.parquet.parquet`
@@ -124,6 +126,7 @@ Source datasets: FineWeb-Edu [`HuggingFaceFW/fineweb-edu`](https://huggingface.c
 (`sample-10BT`); Cosmopedia v2 [`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2);
 DCLM web [`mlfoundations/dclm-baseline-1.0`](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) (`.jsonl.zst`);
 code [`nvidia/OpenCodeInstruct`](https://huggingface.co/datasets/nvidia/OpenCodeInstruct);
+math [`open-web-math/open-web-math`](https://huggingface.co/datasets/open-web-math/open-web-math) (14.7B tokens);
 Wikipedia [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) (`20231101.en`).
 
 ## Training
