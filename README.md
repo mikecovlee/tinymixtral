@@ -42,6 +42,25 @@ Best per row in **bold**; `v1.1-1b` is the 1B MoE at 4B and 8B tokens.
 ¹ v1.0 is the legacy C4 baseline (earlier evaluation setup); shown for reference.
 v3.0 reaches the 1B MoE's accuracy with **~2.5× fewer total** and **~1.28× fewer active** parameters.
 
+### Comparison with similar models
+
+Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot, cuda, bf16):
+
+| Task | Metric | v3.0 (477M) | SmolLM2-360M | Qwen3-0.6B |
+|------|--------|:---:|:---:|:---:|
+| HellaSwag | acc_norm | 0.335 | 0.563 | 0.473 |
+| PIQA | acc | 0.638 | 0.719 | 0.673 |
+| WinoGrande | acc | 0.515 | 0.587 | 0.563 |
+| ARC-Easy | acc | 0.478 | 0.705 | 0.609 |
+| ARC-Challenge | acc_norm | 0.255 | 0.383 | 0.340 |
+| OpenBookQA | acc_norm | 0.296 | 0.372 | 0.316 |
+| BoolQ | acc | 0.615 | 0.620 | 0.643 |
+| LAMBADA | acc | 0.268 | 0.532 | 0.401 |
+
+SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 8.05B tokens
+(~500× and ~4500× less) for v3.0 on a single consumer GPU — the gap is primarily a data-budget
+difference, and v3.0 is competitive on BoolQ (0.615 vs 0.620 / 0.643).
+
 ## Quick Start
 
 ```python

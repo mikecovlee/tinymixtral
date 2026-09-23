@@ -61,6 +61,24 @@ Doubling pretrain tokens improved **every** task (BoolQ +7.2pp, LAMBADA +3.5pp, 
 **Few-shot:** HellaSwag 10-shot acc_norm 0.312 · WinoGrande 5-shot acc 0.524 ·
 ARC-Easy 25-shot acc_norm 0.468 · ARC-Challenge 25-shot acc_norm 0.262.
 
+### Comparison with similar models
+
+Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot, cuda, bf16):
+
+| Task | Metric | 1B MoE (8B) | SmolLM2-360M | Qwen3-0.6B |
+|------|--------|:---:|:---:|:---:|
+| HellaSwag | acc_norm | 0.329 | 0.563 | 0.473 |
+| PIQA | acc | 0.630 | 0.719 | 0.673 |
+| WinoGrande | acc | 0.523 | 0.587 | 0.563 |
+| ARC-Easy | acc | 0.479 | 0.705 | 0.609 |
+| ARC-Challenge | acc_norm | 0.279 | 0.383 | 0.340 |
+| OpenBookQA | acc_norm | 0.306 | 0.372 | 0.316 |
+| BoolQ | acc | 0.620 | 0.620 | 0.643 |
+| LAMBADA | acc | 0.234 | 0.532 | 0.401 |
+
+SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 8B tokens for the
+1B MoE on a single consumer GPU; the gap is primarily a data-budget difference.
+
 ## Instruction following (IFEval)
 
 IFEval (instruction-level loose accuracy), `--apply_chat_template`:
