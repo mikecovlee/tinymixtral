@@ -10,7 +10,7 @@ import torch
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
     BF16AdamW, check_checkpoint_disk_space, final_save, make_adamw,
-    make_cosine_schedule, make_wsd_schedule, training_loop,
+    make_cosine_schedule, make_val_evaluator, make_wsd_schedule, training_loop,
 )
 
 
@@ -34,8 +34,14 @@ def main():
                    help="LR schedule: cosine or wsd (Warmup-Stable-Decay)")
     p.add_argument("--bf16-optim", action="store_true",
                    help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
-    p.add_argument("--eval-on-save", action="store_true",
-                   help="每次保存后同步执行 CPU GLUE 评测")
+    p.add_argument("--val-dir", default=None,
+                   help="val 集目录（内含 val_*.pt，永不参与训练）")
+    p.add_argument("--eval-every-steps", type=int, default=2000,
+                   help="每多少步在 val 集上算一次 PPL")
+    p.add_argument("--eval-max-tokens", type=int, default=2_000_000,
+                   help="每次 val 评估消耗的 token 上限")
+    p.add_argument("--chunked-ce", action="store_true",
+                   help="分块计算 CE，避免物化完整 fp32 logits（省 ~2-3GB 显存）")
     args = p.parse_args()
     if args.batch_size <= 0 or args.seq_len <= 0:
         p.error("batch-size and seq-len must be positive")
@@ -68,6 +74,7 @@ def main():
             f"{model.config.max_position_embeddings}"
         )
     model.gradient_checkpointing_enable()
+    model.use_chunked_ce = args.chunked_ce
     model = model.to("cuda").to(torch.bfloat16)
     nM = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"Model: {nM:.0f}M params", flush=True)
@@ -102,7 +109,9 @@ def main():
 
         saved_bs = state.get("batch_size")
         saved_seq = state.get("seq_len")
-        if saved_bs is not None and (saved_bs != bs or saved_seq != seq):
+        # 续训/后训练模式（--max-tokens）会重置数据位置，允许换 batch size；
+        # 纯断点续训则必须一致，否则位置换算会错。
+        if saved_bs is not None and args.max_tokens is None and (saved_bs != bs or saved_seq != seq):
             p.error(
                 f"checkpoint uses batch-size={saved_bs}, seq-len={saved_seq}; "
                 f"got batch-size={bs}, seq-len={seq}"
@@ -184,15 +193,22 @@ def main():
     print(f"Resume: step={step_done} shard={fi}/{len(files)} ptr={ptr/1e6:.1f}M", flush=True)
 
     # ---- 训练 ----
+    val_files = sorted(glob.glob(f"{args.val_dir}/val_*.pt")) if args.val_dir else []
+    if args.val_dir and not val_files:
+        p.error(f"--val-dir {args.val_dir} contains no val_*.pt shards")
+    if val_files:
+        print(f"Val: {len(val_files)} held-out shards from {args.val_dir}", flush=True)
+
     schedule_args = {"warmup_steps": warmup, "total_steps": total_steps}
+    eval_fn = make_val_evaluator(val_files, bs, seq, args.eval_max_tokens, device="cuda")
     step, total_tok, fi, ptr, elapsed = training_loop(
         model, opt, sched, files, fi=fi, ptr=ptr, total_tok=total_tok,
         bs=bs, seq=seq, chunk=chunk,
         output_dir=output_dir, max_steps=total_steps,
         save_every_min=args.save_every_min, log_every=args.log_every,
         step_start=step_done, schedule_args=schedule_args,
-        eval_on_save=args.eval_on_save,
         keep_last_checkpoints=args.keep_last_checkpoints,
+        eval_fn=eval_fn, eval_every=args.eval_every_steps,
     )
 
     final_save(

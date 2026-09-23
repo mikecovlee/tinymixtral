@@ -98,6 +98,14 @@ class GQAAttention(nn.Module):
         )
         self.attention_dropout = config.attention_dropout
 
+        self.use_qk_norm = config.use_qk_norm
+        if self.use_qk_norm:
+            self.q_norm = RMSNorm(self.head_dim, config.rms_norm_eps)
+            self.k_norm = RMSNorm(self.head_dim, config.rms_norm_eps)
+        else:
+            self.q_norm = None
+            self.k_norm = None
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -109,6 +117,11 @@ class GQAAttention(nn.Module):
         q = self.q_proj(hidden_states).view(B, S, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(hidden_states).view(B, S, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        # QK-Norm（投影后、RoPE 前，per-head RMSNorm）
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
         # RoPE
         if position_ids is None:
@@ -160,6 +173,7 @@ class SparseMoE(nn.Module):
         self.expert_intermediate = config.expert_intermediate_size
         self.jitter_noise = config.router_jitter_noise
         self.aux_loss_coef = config.router_aux_loss_coef
+        self.last_expert_counts: Optional[torch.Tensor] = None
 
         # Router
         self.router = nn.Linear(self.hidden_size, self.num_experts, bias=False)
@@ -212,6 +226,12 @@ class SparseMoE(nn.Module):
             P_i = routing_weights.mean(dim=0)
             aux_loss = (f_i.detach() * P_i).sum() * self.num_experts
 
+        if self.training:
+            with torch.no_grad():
+                self.last_expert_counts = torch.bincount(
+                    selected_experts.view(-1), minlength=self.num_experts
+                )
+
         flat_experts = selected_experts.view(-1)
         flat_weights = routing_weights_topk.view(-1)
         flat_token_idx = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
@@ -240,6 +260,13 @@ class SparseMoE(nn.Module):
 
             final_out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
             start = end
+
+        if self.training:
+            # 零 token 专家梯度保活：0 × Σ(all expert weights) 挂在计算图上，
+            # 保证未命中专家也收到（零）梯度，避免 DDP unused-parameter 报错、
+            # 并保持权重衰减对其一致生效。对输出数值零扰动。
+            keepalive = (self.gate_proj.sum() + self.up_proj.sum() + self.down_proj.sum()) * 0.0
+            final_out = final_out + keepalive.to(final_out.dtype)
 
         return final_out.view(B, S, D), aux_loss
 
@@ -308,7 +335,30 @@ class TinyMixtralForCausalLM(nn.Module):
             self.lm_head.weight = self.embed_tokens.weight
 
         self._use_activation_checkpointing = False
+        self.use_chunked_ce = False
+        self.ce_chunk_size = 512
         self._init_weights()
+
+    def _chunked_cross_entropy(self, hidden_states, labels):
+        def _ce(hc, lc):
+            lg = self.lm_head(hc).float()
+            return F.cross_entropy(
+                lg.reshape(-1, lg.size(-1)), lc.reshape(-1),
+                ignore_index=-100, reduction="sum",
+            )
+
+        total = torch.zeros((), device=hidden_states.device, dtype=torch.float32)
+        n_valid = 0
+        for i in range(0, hidden_states.size(1), self.ce_chunk_size):
+            hc = hidden_states[:, i:i + self.ce_chunk_size]
+            lc = labels[:, i:i + self.ce_chunk_size]
+            if self.training and hc.requires_grad:
+                s = checkpoint(_ce, hc, lc, use_reentrant=False)
+            else:
+                s = _ce(hc, lc)
+            total = total + s
+            n_valid += int((lc != -100).sum())
+        return total / max(n_valid, 1)
 
     def _init_weights(self):
         std = self.config.initializer_range
@@ -370,24 +420,45 @@ class TinyMixtralForCausalLM(nn.Module):
         total_aux_loss = total_aux_loss / len(self.layers)
 
         hidden_states = self.norm(hidden_states)
-        logits = self.lm_head(hidden_states).float()  # fp32 for logits
 
         loss = None
+        ce_loss = None
+        logits = None
         if labels is not None:
-            # 训练循环已做 input/label 对齐（input=batch[:,:-1], labels=batch[:,1:]）
-            # 此处无需再次 shift，直接用 logits 和 labels 计算 loss
-            loss = F.cross_entropy(
-                logits.reshape(-1, logits.size(-1)),
-                labels.reshape(-1),
-                ignore_index=-100,
-            )
-            loss = loss + self.config.router_aux_loss_coef * total_aux_loss
+            if self.use_chunked_ce:
+                ce_loss = self._chunked_cross_entropy(hidden_states, labels)
+            else:
+                logits = self.lm_head(hidden_states).float()
+                ce_loss = F.cross_entropy(
+                    logits.reshape(-1, logits.size(-1)),
+                    labels.reshape(-1),
+                    ignore_index=-100,
+                )
+            loss = ce_loss + self.config.router_aux_loss_coef * total_aux_loss
+        else:
+            logits = self.lm_head(hidden_states).float()
 
         return {
             "logits": logits,
             "loss": loss,
+            "ce_loss": ce_loss.detach() if ce_loss is not None else None,
             "aux_loss": total_aux_loss.detach(),
         }
+
+    def expert_utilization(self) -> Optional[list]:
+        """各专家在最近一次训练 forward 中被选中的 slot 占比（跨层聚合）。
+
+        返回长度 num_local_experts 的浮点列表（和为 1），无统计时返回 None。
+        """
+        counts = [
+            layer.moe.last_expert_counts
+            for layer in self.layers
+            if layer.moe.last_expert_counts is not None
+        ]
+        if not counts:
+            return None
+        total = torch.stack(counts).sum(dim=0).float()
+        return (total / total.sum()).tolist()
 
     def save_pretrained(self, path: str):
         """保存为 HuggingFace 兼容格式。"""

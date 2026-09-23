@@ -19,6 +19,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--cache-dir", default="data/c4/tokenized")
     p.add_argument("--output-dir", default="checkpoints/run")
+    p.add_argument("--config", default=None,
+                   help="模型配置 JSON 文件（默认使用 TinyMixtralConfig 默认值）")
     p.add_argument("--batch-size", type=int, default=22)
     p.add_argument("--seq-len", type=int, default=1024)
     target = p.add_mutually_exclusive_group()
@@ -36,8 +38,6 @@ def main():
                    help="LR schedule: cosine or wsd (Warmup-Stable-Decay)")
     p.add_argument("--bf16-optim", action="store_true",
                    help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
-    p.add_argument("--eval-on-save", action="store_true",
-                   help="每次保存后同步执行 CPU GLUE 评测")
     args = p.parse_args()
     if args.batch_size <= 0 or args.seq_len <= 0:
         p.error("batch-size and seq-len must be positive")
@@ -46,6 +46,9 @@ def main():
     if args.keep_last_checkpoints <= 0:
         p.error("keep-last-checkpoints must be positive")
     cfg = TinyMixtralConfig()
+    if args.config:
+        cfg = TinyMixtralConfig.from_json_file(args.config)
+        print(f"Config loaded from {args.config}", flush=True)
     if args.seq_len > cfg.max_position_embeddings:
         p.error(
             f"seq-len {args.seq_len} exceeds model limit {cfg.max_position_embeddings}"
@@ -98,7 +101,7 @@ def main():
         bs=bs, seq=seq, chunk=chunk,
         output_dir=args.output_dir, max_steps=total_steps,
         save_every_min=args.save_every_min, log_every=args.log_every,
-        schedule_args=schedule_args, eval_on_save=args.eval_on_save,
+        schedule_args=schedule_args,
         keep_last_checkpoints=args.keep_last_checkpoints,
     )
 

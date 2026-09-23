@@ -23,6 +23,10 @@ tokenizer/
 # Eval outputs (source code in evals/ is tracked)
 evals/run/
 evals/baseline/
+evals/*.json
+evals/*.jsonl
+evals/harness_*/
+evals/ifeval_*/
 results*.json
 
 # Logs
@@ -32,4 +36,4 @@ results*.json
 .env/
 
 # Publish
-publish/
+publish*/
