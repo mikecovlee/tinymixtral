@@ -21,10 +21,12 @@
 #
 #   -MaxTokens = actual pool size, one full pass per pool (docs P5a):
 #               main_s1 2.00B, main_s2 1.94B, main_s3 2.20B, main_s4 1.91B (8.05B total)
-#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s1 -Pool main_s1 -Lr 5e-4 -MaxTokens 2000000000
-#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s2 -Pool main_s2 -Lr 5e-4 -MaxTokens 1940000000 -ResumeFrom s1
-#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s3 -Pool main_s3 -Lr 4e-4 -MaxTokens 2200000000 -ResumeFrom s2
-#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s4 -Pool main_s4 -Lr 3e-4 -MaxTokens 1910000000 -ResumeFrom s3
+#   NOTE: the v3.0 run uses chunked cross-entropy; -ChunkedCe is off by default, so pass
+#         it explicitly (as below) to match the recipe.
+#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s1 -Pool main_s1 -Lr 5e-4 -MaxTokens 2000000000 -ChunkedCe
+#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s2 -Pool main_s2 -Lr 5e-4 -MaxTokens 1940000000 -ResumeFrom s1 -ChunkedCe
+#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s3 -Pool main_s3 -Lr 4e-4 -MaxTokens 2200000000 -ResumeFrom s2 -ChunkedCe
+#   pwsh versions\v3.0\scripts\run_segment.ps1 -Tag s4 -Pool main_s4 -Lr 3e-4 -MaxTokens 1910000000 -ResumeFrom s3 -ChunkedCe
 #
 # Progress markers (one per line, grep for these):
 #   SEGMENT_DONE <Tag>   training finished, final checkpoint found

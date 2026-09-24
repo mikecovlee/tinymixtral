@@ -78,7 +78,7 @@ python scripts/prepare_data_local.py --input data/raw/r5_web_pq --tokenizer toke
   --output data/pretrain/r5_web --max-tokens 1600000000 --force --workers 8
 
 # Code (12.5%) — OpenCodeInstruct (text = input + "\n\n" + output)
-python scripts/download_parquets.py --repo nvidia/OpenCodeInstruct --subdir <files-dir> \
+python scripts/download_parquets.py --repo nvidia/OpenCodeInstruct --subdir data \
   --output data/raw/r5_code --workers 4
 python scripts/columns_to_text_parquet.py --input data/raw/r5_code \
   --output data/raw/r5_code_text --columns input output --sep "\n\n"
@@ -90,6 +90,22 @@ python scripts/download_parquets.py --repo open-web-math/open-web-math --subdir 
   --output data/raw/r5_math --workers 4
 python scripts/prepare_data_local.py --input data/raw/r5_math --tokenizer tokenizer/ \
   --output data/pretrain/r5_math --max-tokens 500000000 --force --workers 8
+
+# FineWeb-Edu (extra 1B web) — tail 4 parquets of sample/350BT -> p5_web
+python scripts/download_parquets.py --repo HuggingFaceFW/fineweb-edu --subdir sample/350BT \
+  --output data/raw/p5_web4 --workers 4 --last 4
+python scripts/prepare_data_local.py --input data/raw/p5_web4 --tokenizer tokenizer/ \
+  --output data/pretrain/p5_web --max-tokens 1000000000 --force --workers 8
+
+# Cosmopedia v2 (extra synthetic 550M) — tail parquets -> p5_synth. Grab the last 8
+# (train-00096..00103-of-00104), then drop the final two (00102/00103): a separate
+# 400M-token extract (`r5_synth`, NOT part of this recipe) already owns those files, so
+# removing them keeps the raw store disjoint even though the 550M window never reaches them.
+python scripts/download_parquets.py --repo HuggingFaceTB/cosmopedia-v2 --subdir cosmopedia-v2 \
+  --output data/raw/p5_synth --workers 4 --last 8
+rm data/raw/p5_synth/train-00102-of-00104.parquet* data/raw/p5_synth/train-00103-of-00104.parquet*
+python scripts/prepare_data_local.py --input data/raw/p5_synth --tokenizer tokenizer/ \
+  --output data/pretrain/p5_synth --max-tokens 550000000 --force --workers 8
 ```
 
 > Conventions: `download_parquets.py` / `zst_jsonl_to_parquet.py` emit `<name>.parquet.parquet`
@@ -100,9 +116,11 @@ python scripts/prepare_data_local.py --input data/raw/r5_math --tokenizer tokeni
 
 Then assemble the four strictly disjoint pools (Bresenham-interleaved, hard-linked, inode-verified).
 `--start/--take` select each source's shard range; every source passes `--val-take 0` because
-validation uses the separate `pilot_blend30_val` directory. Shown for `main_s1`:
+validation uses the separate `pilot_blend30_val` directory (built first — see below). Source
+order is free but each `--source` needs its own matching `--start/--take/--val-take` triple.
 
 ```bash
+# main_s1 (2.00B)
 python scripts/make_blend_shards.py --output data/pretrain/main_s1 \
   --source data/pretrain/fineweb3    --start 8 --take 7 --val-take 0 \
   --source data/pretrain/p5_web      --start 0 --take 2 --val-take 0 \
@@ -111,6 +129,37 @@ python scripts/make_blend_shards.py --output data/pretrain/main_s1 \
   --source data/pretrain/r5_code     --start 0 --take 2 --val-take 0 \
   --source data/pretrain/r5_math     --start 0 --take 1 --val-take 0 \
   --source data/pretrain/r5_wiki     --start 0 --take 1 --val-take 0
+
+# main_s2 (1.94B)
+python scripts/make_blend_shards.py --output data/pretrain/main_s2 \
+  --source data/pretrain/fineweb3    --start 15 --take 7 --val-take 0 \
+  --source data/pretrain/p5_web      --start 2  --take 2 --val-take 0 \
+  --source data/pretrain/r5_web      --start 4  --take 4 --val-take 0 \
+  --source data/pretrain/cosmopedia3 --start 4  --take 1 --val-take 0 \
+  --source data/pretrain/p5_synth    --start 0  --take 1 --val-take 0 \
+  --source data/pretrain/r5_code     --start 2  --take 3 --val-take 0 \
+  --source data/pretrain/r5_math     --start 1  --take 1 --val-take 0 \
+  --source data/pretrain/r5_wiki     --start 1  --take 1 --val-take 0
+
+# main_s3 (2.20B)
+python scripts/make_blend_shards.py --output data/pretrain/main_s3 \
+  --source data/pretrain/fineweb3    --start 22 --take 7 --val-take 0 \
+  --source data/pretrain/p5_web      --start 4  --take 2 --val-take 0 \
+  --source data/pretrain/r5_web      --start 8  --take 4 --val-take 0 \
+  --source data/pretrain/p5_synth    --start 1  --take 3 --val-take 0 \
+  --source data/pretrain/r5_code     --start 5  --take 3 --val-take 0 \
+  --source data/pretrain/r5_math     --start 2  --take 1 --val-take 0 \
+  --source data/pretrain/r5_wiki     --start 2  --take 2 --val-take 0
+
+# main_s4 (1.91B)
+python scripts/make_blend_shards.py --output data/pretrain/main_s4 \
+  --source data/pretrain/fineweb3    --start 29 --take 7 --val-take 0 \
+  --source data/pretrain/p5_web      --start 6  --take 2 --val-take 0 \
+  --source data/pretrain/r5_web      --start 12 --take 4 --val-take 0 \
+  --source data/pretrain/p5_synth    --start 4  --take 2 --val-take 0 \
+  --source data/pretrain/r5_code     --start 8  --take 2 --val-take 0 \
+  --source data/pretrain/r5_math     --start 3  --take 2 --val-take 0 \
+  --source data/pretrain/r5_wiki     --start 4  --take 1 --val-take 0
 ```
 
 | Pool | Source shard ranges (100M-token shards) |
@@ -120,10 +169,39 @@ python scripts/make_blend_shards.py --output data/pretrain/main_s1 \
 | main_s3 (2.20B) | fineweb3[22–28], p5_web[4–5], r5_web[8–11], p5_synth[1–3], r5_code[5–7], r5_math[2], r5_wiki[2–3] |
 | main_s4 (1.91B) | fineweb3[29–35], p5_web[6–7], r5_web[12–15], p5_synth[4–5], r5_code[8–9], r5_math[3–4], r5_wiki[4] |
 
-`p5_web` is an additional DCLM slice; `p5_synth` shares the Cosmopedia v2 schema.
+> A source whose `--max-tokens` is not a whole multiple of 100M leaves a **partial trailing
+> shard** — `fineweb3[35]` = 60M, `cosmopedia3[4]` = 40M, `p5_synth[5]` = 50M. That is exactly
+> why `main_s2` lands on 1.94B (one 40M shard) and `main_s4` on 1.91B (60M + 50M shards) rather
+> than round numbers; the interleave counts whole files regardless of their token length.
+
+`p5_web` is a second FineWeb-Edu slice (`sample/350BT` tail, parquets `015_00018`..`016_00001`,
+1.0B tokens) and `p5_synth` is a second Cosmopedia v2 slice (tail `train-00096..00101-of-00104`,
+550M tokens). Both are already counted in the family rows of the source-share table above
+(`FineWeb-Edu 44%` = fineweb3 2.8B + p5_web 0.8B; `Cosmopedia 12.5%` = cosmopedia3 + p5_synth);
+they are split across two acquisition routes only because each slice came from a different
+dataset window.
+
+### Validation set (`pilot_blend30_val`)
+
+Held out at pool-build time via `make_blend_shards.py --val-take N`: each source
+sacrifices the next `N` shards immediately after its taken range into
+`<output>_val/val_*.pt`, which never participate in training. For the main runs the
+two `pilot_blend30_val` shards come from `fineweb3[7]` + `cosmopedia3[3]`:
+
+```bash
+python scripts/make_blend_shards.py --output data/pretrain/pilot_blend30 \
+  --source data/pretrain/fineweb3    --take 7 --val-take 1 \
+  --source data/pretrain/cosmopedia3 --take 3 --val-take 1
+# -> data/pretrain/pilot_blend30/        10 interleaved train_XXXX.pt
+# -> data/pretrain/pilot_blend30_val/    val_0000.pt (fineweb3[7]), val_0001.pt (cosmopedia3[3])
+```
+
+All four `main_s1..s4` pools pass `--val-take 0` and reuse this same validation
+directory (`--val-dir data/pretrain/pilot_blend30_val`) so segments stay comparable.
 
 Source datasets: FineWeb-Edu [`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
-(`sample-10BT`); Cosmopedia v2 [`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2);
+(`sample-10BT` for `fineweb3`, `sample/350BT` for `p5_web`); Cosmopedia v2 [`HuggingFaceTB/cosmopedia-v2`](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2)
+(`cosmopedia3` + `p5_synth`, disjoint tail windows);
 DCLM web [`mlfoundations/dclm-baseline-1.0`](https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0) (`.jsonl.zst`);
 code [`nvidia/OpenCodeInstruct`](https://huggingface.co/datasets/nvidia/OpenCodeInstruct);
 math [`open-web-math/open-web-math`](https://huggingface.co/datasets/open-web-math/open-web-math) (14.7B tokens);
