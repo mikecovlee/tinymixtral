@@ -115,6 +115,8 @@ python scripts/prepare_data_local.py --input data/raw/p5_synth --tokenizer token
 > run.
 
 Then assemble the four strictly disjoint pools (Bresenham-interleaved, hard-linked, inode-verified).
+Pools hard-link the source shards (`os.link`); pass `--copy` if a pool directory would land on a
+different volume than its sources.
 `--start/--take` select each source's shard range; every source passes `--val-take 0` because
 validation uses the separate `pilot_blend30_val` directory (built first — see below). Source
 order is free but each `--source` needs its own matching `--start/--take/--val-take` triple.
@@ -270,8 +272,68 @@ Notes:
 
 ## Quick Start (training)
 
-See `versions/v3.0/scripts/run_segment.ps1` (Windows) for the 4-segment launcher, or drive `scripts/train.py`
-/ `scripts/resume.py` directly. Publishes to HF with `scripts/publish_hf.py`.
+### Environment
+
+```bash
+conda create -n tinymixtral python=3.13 -y && conda activate tinymixtral
+pip install -r requirements.txt
+pip install "lm-eval==0.4.12"   # exact version the Results table was measured with
+```
+
+(See `REPRODUCE.md` §0 for the full setup; paths below assume the repo root, with data under
+`data/pretrain/` and the tokenizer under `tokenizer/` as produced by the Data section.)
+
+### Four-segment run (Linux / macOS)
+
+One full pass per pool, so `--max-tokens` equals the exact pool size. `resume.py --max-tokens`
+runs in *post-train* mode: step counter and data position reset to 0, a fresh full WSD schedule
+is sized from the token budget, `--lr` overrides the saved LR, AdamW momentum carries over.
+`--chunked-ce` is off by default but the v3.0 run used it — pass it on **every** segment.
+
+```bash
+CFG=versions/v3.0/configs/improve_v05b.json
+DATA=data/pretrain
+COMMON="--schedule wsd --warmup-steps 700 --batch-size 48 --bf16-optim --chunked-ce \
+        --save-every-min 60 --log-every 100 --eval-every-steps 500 --keep-last-checkpoints 2"
+
+# S1: fresh start, main_s1 (2.00B), lr 5e-4
+python scripts/train.py --config $CFG --cache-dir $DATA/main_s1 \
+  --val-dir $DATA/pilot_blend30_val --output-dir checkpoints/s1 \
+  --max-tokens 2000000000 --lr 5e-4 --seed 42 $COMMON
+
+# S2: resume from s1, main_s2 (1.94B), lr 5e-4
+python scripts/resume.py --checkpoint-dir checkpoints/s1 --cache-dir $DATA/main_s2 \
+  --val-dir $DATA/pilot_blend30_val --output-dir checkpoints/s2 \
+  --max-tokens 1940000000 --lr 5e-4 $COMMON
+
+# S3: resume from s2, main_s3 (2.20B), lr 4e-4
+python scripts/resume.py --checkpoint-dir checkpoints/s2 --cache-dir $DATA/main_s3 \
+  --val-dir $DATA/pilot_blend30_val --output-dir checkpoints/s3 \
+  --max-tokens 2200000000 --lr 4e-4 $COMMON
+
+# S4: resume from s3, main_s4 (1.91B), lr 3e-4
+python scripts/resume.py --checkpoint-dir checkpoints/s3 --cache-dir $DATA/main_s4 \
+  --val-dir $DATA/pilot_blend30_val --output-dir checkpoints/s4 \
+  --max-tokens 1910000000 --lr 3e-4 $COMMON
+```
+
+After a segment, publish its `step_<NNNNNNN>_final` checkpoint (find it with
+`ls checkpoints/s4/step_*_final`) and run the 8-task 0-shot suite:
+
+```bash
+python scripts/publish_hf.py --checkpoint checkpoints/s4/step_<NNNNNNN>_final \
+  --output evals/results/s4/publish --tokenizer tokenizer/
+lm_eval --model hf \
+  --model_args pretrained=evals/results/s4/publish,trust_remote_code=True,dtype=bfloat16 \
+  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai \
+  --batch_size 16 --device cuda --output_path evals/results/s4
+```
+
+On Windows, `versions/v3.0/scripts/run_segment.ps1` automates train → publish → eval per segment
+(`-Tag s1 -Pool main_s1 -Lr 5e-4 -MaxTokens 2000000000 -ChunkedCe`, then `-ResumeFrom s1` for the
+rest). Reproducing the *recipe* (data pools, hyperparameters, schedules) is deterministic; exact
+val-PPL / benchmark numbers are hardware-dependent (bf16 kernel ordering) and will vary by a few
+hundredths across GPUs.
 
 ```python
 from transformers import AutoModelForCausalLM
