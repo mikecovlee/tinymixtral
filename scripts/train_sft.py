@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import math
+import numpy as np
 import sys
 import time
 from pathlib import Path
@@ -72,8 +73,8 @@ def pack_sequences(examples, max_length, pad_token_id):
         buf_ids.extend([pad_token_id] * pad)
         buf_labels.extend([-100] * pad)
         shifted = buf_labels[1:] + [-100]
-        packed_ids.append(buf_ids)
-        packed_labels.append(shifted)
+        packed_ids.append(np.asarray(buf_ids, dtype=np.int32))
+        packed_labels.append(np.asarray(shifted, dtype=np.int32))
         buf_ids, buf_labels = [], []
 
     for ids, labs in examples:
@@ -125,7 +126,11 @@ def main():
     print(f"Model: {n_total:,} params", flush=True)
 
     print(f"Loading {args.dataset} (max {args.max_samples})...", flush=True)
-    ds = load_dataset(args.dataset, split="train", streaming=True)
+    if args.dataset.endswith(".parquet"):
+        ds = load_dataset("parquet", data_files=args.dataset, split="train",
+                          streaming=True)
+    else:
+        ds = load_dataset(args.dataset, split="train", streaming=True)
     texts, spans_list = [], []
     for ex in ds:
         if len(texts) >= args.max_samples:
@@ -147,7 +152,8 @@ def main():
     for i, (text, spans) in enumerate(zip(texts, spans_list)):
         ids, labs = tokenize_with_mask(text, spans, tokenizer)
         if len(ids) >= 10:
-            tokenized.append((ids, labs))
+            tokenized.append((np.asarray(ids, dtype=np.int32),
+                              np.asarray(labs, dtype=np.int32)))
         if (i + 1) % 5000 == 0:
             print(f"  {i + 1}/{len(texts)}...", flush=True)
     del texts, spans_list
@@ -159,8 +165,8 @@ def main():
     del tokenized
     print(f"{len(packed_ids)} sequences", flush=True)
 
-    all_ids = torch.tensor(packed_ids, dtype=torch.long)
-    all_labels = torch.tensor(packed_labels, dtype=torch.long)
+    all_ids = torch.from_numpy(np.stack(packed_ids)).contiguous()
+    all_labels = torch.from_numpy(np.stack(packed_labels)).contiguous()
     del packed_ids, packed_labels
 
     num_seqs = all_ids.shape[0]
@@ -178,8 +184,8 @@ def main():
         indices = torch.randperm(num_seqs)
         for bi in range(0, num_seqs, args.batch_size):
             batch_idx = indices[bi : bi + args.batch_size]
-            input_ids = all_ids[batch_idx].to(device)
-            labels = all_labels[batch_idx].to(device)
+            input_ids = all_ids[batch_idx].long().to(device)
+            labels = all_labels[batch_idx].long().to(device)
 
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 out = model(input_ids, labels=labels)
