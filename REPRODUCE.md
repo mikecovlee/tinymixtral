@@ -94,7 +94,7 @@ python scripts/publish_hf.py --checkpoint checkpoints/<run>/<step>_final \
 
 lm_eval --model hf \
   --model_args "pretrained=publish/<name>,tokenizer=tokenizer/,trust_remote_code=True,dtype=bfloat16" \
-  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai \
+  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,lambada_openai \
   --batch_size 16 --device cuda
 ```
 

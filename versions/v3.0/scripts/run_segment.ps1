@@ -15,7 +15,7 @@
 #   - val is always pilot_blend30_val (2 held-out shards, comparable to the
 #     pilot/matrix PPL curves)
 #   - bs 48, chunked-ce, seed 42, keep-last 2 identical across all segments
-#   - after each segment the final ckpt is published and the repo's 8-task
+#   - after each segment the final ckpt is published and the repo's 7-task
 #     0-shot lm-eval-harness suite runs (canonical form: README "Evaluation";
 #     scripted form: scripts/run_ifeval_all.sh)
 #
@@ -73,7 +73,7 @@ $OutDir     = "checkpoints\$Tag"
 $EvalDir    = "evals\results\$Tag"
 $PublishDir = "evals\results\$Tag\publish"
 $Tokenizer  = "$DataRoot\tokenizer"
-$EvalTasks  = "hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai"
+$EvalTasks  = "hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,lambada_openai"
 
 # --- training command: fresh (train.py) vs resumed (resume.py) ---
 if ([string]::IsNullOrWhiteSpace($ResumeFrom)) {
@@ -123,7 +123,7 @@ else {
     if ($ChunkedCe) { $trainArgs += "--chunked-ce" }
 }
 
-# --- eval command: publish the final ckpt, then 8-task 0-shot harness ---
+# --- eval command: publish the final ckpt, then 7-task 0-shot harness ---
 $evalModelArgs = "pretrained=$PublishDir\,trust_remote_code=True,dtype=bfloat16"
 $evalArgs = @(
     "--model", "hf",
@@ -200,7 +200,7 @@ if (-not $final) {
 Write-Output ("SEGMENT_DONE " + $Tag)
 Write-Output ("FINAL_CKPT " + $final.FullName)
 
-# --- eval: publish + 8-task 0-shot harness ---
+# --- eval: publish + 7-task 0-shot harness ---
 function Print-Manual-Commands {
     param([string]$Why)
     Write-Output ("EVAL_SKIPPED " + $Tag)

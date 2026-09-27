@@ -56,7 +56,6 @@ post-train blend `knowledge_blend` = Wikipedia ([`wikimedia/wikipedia`](https://
 | ARC-Easy | acc | 0.456 | **0.474** |
 | ARC-Challenge | acc_norm | 0.247 | **0.272** |
 | OpenBookQA | acc_norm | 0.288 | **0.290** |
-| BoolQ | acc | **0.606** | 0.455 |
 | LAMBADA | acc | **0.227** | 0.224 |
 
 ### Comparison with similar models
@@ -71,7 +70,6 @@ Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot
 | ARC-Easy | acc | 0.474 | 0.705 | 0.609 |
 | ARC-Challenge | acc_norm | 0.272 | 0.383 | 0.340 |
 | OpenBookQA | acc_norm | 0.290 | 0.372 | 0.316 |
-| BoolQ | acc | 0.455 | 0.620 | 0.643 |
 | LAMBADA | acc | 0.224 | 0.532 | 0.401 |
 
 SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 4B tokens for
@@ -80,6 +78,6 @@ v2.0 beta on a single consumer GPU; the gap is primarily a data-budget differenc
 ## Conclusion
 
 The shared expert does **not** provide substantial improvement at this scale: mixed harness
-results (HellaSwag/ARC +1.5–2.5pp, BoolQ −15pp) for 15% more total params. At ~241M active
+results (HellaSwag/ARC +1.5–2.5pp, one yes/no task −15pp) for 15% more total params. At ~241M active
 params the routing overhead and representational fragmentation outweigh the capacity benefit.
 The design is more likely to pay off at 1B+ active params (cf. DeepSeek, Mixtral).

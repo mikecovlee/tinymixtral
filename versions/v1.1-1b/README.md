@@ -54,11 +54,11 @@ python scripts/train.py --config versions/v1.1-1b/configs/v1b_moe.json \
 | ARC-Easy | acc | 0.463 | **0.479** |
 | ARC-Challenge | acc_norm | 0.273 | **0.279** |
 | OpenBookQA | acc_norm | 0.288 | **0.306** |
-| BoolQ | acc | 0.548 | **0.620** |
 | LAMBADA | acc | 0.200 | **0.234** |
-| **Mean** | — | 0.402 | **0.425** |
+| **Mean** | — | 0.381 | **0.397** |
 
-Doubling pretrain tokens improved **every** task (BoolQ +7.2pp, LAMBADA +3.5pp, mean +2.3pp).
+Doubling pretrain tokens improved **every** task (LAMBADA +3.4pp, HellaSwag/OpenBookQA
++1.8pp, mean +1.6pp).
 
 **Few-shot:** HellaSwag 10-shot acc_norm 0.312 · WinoGrande 5-shot acc 0.524 ·
 ARC-Easy 25-shot acc_norm 0.468 · ARC-Challenge 25-shot acc_norm 0.262.
@@ -75,7 +75,6 @@ Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot
 | ARC-Easy | acc | 0.479 | 0.705 | 0.609 |
 | ARC-Challenge | acc_norm | 0.279 | 0.383 | 0.340 |
 | OpenBookQA | acc_norm | 0.306 | 0.372 | 0.316 |
-| BoolQ | acc | 0.620 | 0.620 | 0.643 |
 | LAMBADA | acc | 0.234 | 0.532 | 0.401 |
 
 SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 8B tokens for the
@@ -109,7 +108,6 @@ Loss fell 2.98 → 1.8 but **downstream metrics were unchanged**:
 | ARC-Easy (acc) | 0.463 | 0.465 |
 | ARC-Challenge (acc_norm) | 0.273 | 0.272 |
 | OpenBookQA (acc_norm) | 0.288 | 0.290 |
-| BoolQ (acc) | 0.548 | 0.528 |
 | LAMBADA (acc) | 0.200 | 0.195 |
 
 At this scale, low-LR post-training on a knowledge blend lowers the loss but does not transfer

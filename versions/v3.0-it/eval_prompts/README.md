@@ -14,7 +14,7 @@ Provenance and usage:
 - Sampled as a held-out prompt set **before** training-set selection in
   `versions/v3.0-it/data/build_dataset.py`, so no model in this repo was ever trained on any
   of these prompts.
-- Shared by all arms (base, prior SFT, v1/v2/v3/v4) so rubric comparisons are
+- Shared by all evaluated models (base, prior SFT, 200k/1M/3M/polish tiers) so rubric comparisons are
   **paired per prompt id** (see `versions/v3.0-it/judge/rubric_stats.py` and
   `versions/v3.0-it/eval/final_table.py`).
 - Consumed by the eval chain: `versions/v3.0-it/eval/response_eval.py gen` generates

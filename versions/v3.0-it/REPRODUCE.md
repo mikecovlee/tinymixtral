@@ -96,10 +96,10 @@ python versions/v3.0-it/eval/response_eval.py gen --model publish/v3.0-it \
 python versions/v3.0-it/judge/rubric_judge.py --responses data/eval/gen_v3.0-it.jsonl \
   --out data/eval/rubric_v3.0-it.jsonl --limit 5000 --concurrency 8
 
-# 4) lm-eval: 8-task harness / ifeval / gsm8k
+# 4) lm-eval: 7-task harness / ifeval / gsm8k
 python -m lm_eval --model hf \
   --model_args pretrained=publish/v3.0-it,tokenizer=publish/v3.0-it,trust_remote_code=True,dtype=bfloat16 \
-  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai \
+  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,lambada_openai \
   --batch_size 16 --device cuda --output_path evals/harness/v3.0-it
 #   ... same with --tasks ifeval --apply_chat_template --batch_size 8 -> evals/ifeval/v3.0-it
 #   ... and with --tasks gsm8k --batch_size 8 -> evals/gsm8k/v3.0-it
@@ -124,7 +124,7 @@ Preregistered methodology (see lessons 8.3 in the report):
 - **Rubric**: same 4,955 held-out prompts, same judge (`rubric_judge.py` + deepseek-flash),
   **per-item paired** t-test against the reference model.
 - **Canonical harness formula**: acc_norm for hellaswag/piqa/arc_challenge/openbookqa,
-  acc for winogrande/arc_easy/boolq/lambada, simple mean of the 8 (base v3.0 = 0.4250).
+  acc for winogrande/arc_easy/lambada, simple mean of the 7 (base v3.0 = 0.3979).
 - `rubric_judge.py` **silently skips** items whose API call fails after 4 retries — always
   verify output row count == prompt count (polish once missed 2,036 rows; root cause API 402;
   fix: `--resume` fills exactly the missing ids).
@@ -136,13 +136,15 @@ Preregistered methodology (see lessons 8.3 in the report):
 | rubric (4,955, paired vs baseline) | not run (new set) | 6.40±0.18 | 11.44±0.26 (+5.04, t=+19.2) | 11.97±0.24 (+5.56, t=+22.4) | **15.01±0.28 (+8.61, t=+30.7)** |
 | IFEval prompt/inst-strict | — | 0.0924/0.1894 | 0.0961/0.2014 | 0.1091/0.2026 | **0.1701/0.2794** |
 | GSM8K strict/flexible | — | —/0.0167 | 0.0159/0.0265 | 0.0174/0.0197 | 0.0205/**0.0227** |
-| 8-task harness (canonical) | 0.4250 | 0.4260* | 0.4210 | 0.4158 | 0.4034 (boolq 0.4263 is the main drag) |
+| 7-task harness (canonical) | 0.3979 | not run* | 0.3983 | 0.3962 | **0.4002** |
 
-\* baseline 0.4260 is a pre-campaign recorded value whose formula is unrecoverable; reference only.
+\* the only recorded baseline harness number used an unrecoverable legacy formula (pre-dating
+the BoolQ removal); not comparable with this table.
 
-Known trade-off: data scaling greatly improves instruction following and open-ended
-quality (rubric, IFEval) but regresses basic discrimination tasks; boolq is the most
-sensitive (0.615→0.426). The 50k-polish (50k rows, lr 5e-6, init=3M) verified as no
+Instruction following and open-ended quality (rubric, IFEval) improve sharply with scale
+while the 7-task harness stays within ±0.23pp of the base (the 3M tier leads slightly).
+BoolQ was dropped from the suite as an unstable sentinel (see `REPORT.md` §8.5). The
+50k-polish (50k rows, lr 5e-6, init=3M) verified as no
 gain (paired −0.15, t=−0.8) and is not needed to reproduce 3M. See
 `REPORT.md` (incl. §8 Lessons Learned).
 

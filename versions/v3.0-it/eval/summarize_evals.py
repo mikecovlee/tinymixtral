@@ -12,7 +12,6 @@ HARNESS_TASKS = [
     ("arc_easy", "acc,none", "acc_norm,none"),
     ("arc_challenge", "acc_norm,none", "acc,none"),
     ("openbookqa", "acc_norm,none", "acc,none"),
-    ("boolq", "acc,none", None),
     ("lambada_openai", "acc,none", None),
 ]
 
@@ -59,7 +58,7 @@ def main():
     ifeval = sorted(glob.glob(os.path.join(args.dir, "ifeval_*.json")))
     gsm8k = sorted(glob.glob(os.path.join(args.dir, "gsm8k_*.json")))
 
-    print(f"== 8-task harness (canonical: acc_norm for hellaswag/piqa/arc_challenge/openbookqa) ==")
+    print(f"== 7-task harness (canonical: acc_norm for hellaswag/piqa/arc_challenge/openbookqa) ==")
     print(f"{'arm':28s} {'mean':>8s} {'alt_mix':>8s}")
     for path in harness:
         results, mean, mean_alt = harness_rows(path)

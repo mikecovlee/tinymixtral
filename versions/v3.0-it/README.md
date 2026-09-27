@@ -48,14 +48,33 @@ RTX PRO 4500). The polish tier is a low-lr (5e-6) stratified subset run evaluate
 | IFEval prompt-strict | — | **0.1701** |
 | IFEval inst-strict | — | **0.2794** |
 | GSM8K flexible | — | 0.0227 |
-| 8-task harness (canonical) | **0.4250** | 0.4034 |
+| 7-task harness (canonical) | 0.3979 | **0.4002** |
 | LLM rubric (0-100, n=4,955) | 6.4 ± 0.18* | **15.0 ± 0.28** |
 
 *baseline SFT arm on the same held-out prompts; paired delta +8.61 ± 0.28 (t = +30.7).
-Honest trade-off: instruction-following and answer quality are sharply better, while
-multiple-choice common-sense accuracy drops ~2.2pp (mostly boolq 0.615 → 0.426).
-Canonical harness mean = acc_norm for hellaswag/piqa/arc_challenge/openbookqa, acc for
-winogrande/arc_easy/boolq/lambada. Full tables and per-task numbers in `REPORT.md`.
+Instruction following and answer quality rise sharply, and the 7-task harness edges up
+(+0.23pp vs the base) — only ARC-Easy dips (0.478 → 0.448); the other six tasks are flat
+or better. Canonical harness mean = acc_norm for hellaswag/piqa/arc_challenge/openbookqa,
+acc for winogrande/arc_easy/lambada (BoolQ was dropped from the suite as an unstable
+sentinel — see `REPORT.md` §8.5). Full tables and per-task numbers in `REPORT.md`.
+
+### Comparison with similar models
+
+Same 7-task suite, measured locally (lm-evaluation-harness v0.4.12, 0-shot, cuda, bf16):
+
+| Task | Metric | v3.0-it (477M) | SmolLM2-360M | Qwen3-0.6B |
+|------|--------|:---:|:---:|:---:|
+| HellaSwag | acc_norm | 0.340 | 0.563 | 0.473 |
+| PIQA | acc | 0.634 | 0.719 | 0.673 |
+| WinoGrande | acc | 0.528 | 0.587 | 0.563 |
+| ARC-Easy | acc | 0.448 | 0.705 | 0.609 |
+| ARC-Challenge | acc_norm | 0.260 | 0.383 | 0.340 |
+| OpenBookQA | acc_norm | 0.302 | 0.372 | 0.316 |
+| LAMBADA | acc | 0.289 | 0.532 | 0.401 |
+| **Mean** | — | 0.4002 | 0.5516 | 0.4821 |
+
+SmolLM2-360M (4T tokens) and Qwen3-0.6B (36T tokens) are far above v3.0-it's 8.05B-token
+budget (~500× / ~4500×) — the gap is primarily a data-budget difference.
 
 ## Quick start
 

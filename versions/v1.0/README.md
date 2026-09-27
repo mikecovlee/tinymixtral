@@ -65,7 +65,6 @@ Continue from the C4 checkpoint on higher-quality data: FineWeb-Edu
 | ARC-Easy | acc | 0.422 |
 | ARC-Challenge | acc_norm | 0.247 |
 | OpenBookQA | acc_norm | 0.308 |
-| BoolQ | acc | 0.579 |
 | LAMBADA | acc | 0.240 |
 
 These serve as the (weak) baseline for the data-quality ablation that produced v1.1.

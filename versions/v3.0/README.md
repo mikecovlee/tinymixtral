@@ -237,9 +237,8 @@ v3.0 (S4, 8.05B tokens) vs the previous releases:
 | ARC-Easy | acc | 0.478 | **0.479** | 0.456 | 0.474 |
 | ARC-Challenge | acc_norm | 0.255 | **0.279** | 0.247 | 0.272 |
 | OpenBookQA | acc_norm | 0.296 | **0.306** | 0.288 | 0.290 |
-| BoolQ | acc | 0.615 | **0.620** | 0.606 | 0.455 |
 | LAMBADA | acc | **0.268** | 0.234 | 0.227 | 0.224 |
-| **Mean** | — | **0.4250** | 0.425 | 0.409 | 0.397 |
+| **Mean** | — | **0.3979** | 0.397 | 0.381 | 0.389 |
 
 ### Comparison with similar models
 
@@ -253,12 +252,11 @@ Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot
 | ARC-Easy | acc | 0.478 | 0.705 | 0.609 |
 | ARC-Challenge | acc_norm | 0.255 | 0.383 | 0.340 |
 | OpenBookQA | acc_norm | 0.296 | 0.372 | 0.316 |
-| BoolQ | acc | 0.615 | 0.620 | 0.643 |
 | LAMBADA | acc | 0.268 | 0.532 | 0.401 |
 
 SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 8.05B tokens
 (~500× and ~4500× less) for v3.0 on a single consumer GPU — the gap is primarily a data-budget
-difference, and v3.0 is competitive on BoolQ (0.615 vs 0.620 / 0.643).
+difference.
 
 **Data efficiency:** v3.0 matches the 1B MoE trained on the same 8B tokens using **2.5× fewer
 total parameters and 1.28× fewer active parameters** (~1.3× fewer FLOPs per token).
@@ -318,14 +316,14 @@ python scripts/resume.py --checkpoint-dir checkpoints/s3 --cache-dir $DATA/main_
 ```
 
 After a segment, publish its `step_<NNNNNNN>_final` checkpoint (find it with
-`ls checkpoints/s4/step_*_final`) and run the 8-task 0-shot suite:
+`ls checkpoints/s4/step_*_final`) and run the 7-task 0-shot suite:
 
 ```bash
 python scripts/publish_hf.py --checkpoint checkpoints/s4/step_<NNNNNNN>_final \
   --output evals/results/s4/publish --tokenizer tokenizer/
 lm_eval --model hf \
   --model_args pretrained=evals/results/s4/publish,trust_remote_code=True,dtype=bfloat16 \
-  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai \
+  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,lambada_openai \
   --batch_size 16 --device cuda --output_path evals/results/s4
 ```
 

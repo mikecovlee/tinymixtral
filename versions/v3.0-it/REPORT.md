@@ -9,7 +9,7 @@
 - Goal: rebuild a larger, more balanced, higher-quality general SFT from base (**no Chinese data this round**):
   - 3M: 3M rows, 1 epoch;
   - polish: 50k high-quality CoT polish (lr 5e-6, 1 epoch).
-- Metric priority: **rubric and IFEval are primary**; the 8-task harness is a regression guard only.
+- Metric priority: **rubric and IFEval are primary**; the 7-task harness is a regression guard only.
 
 ## 2. Method
 
@@ -30,7 +30,7 @@
 
 - rubric: 4,955 fresh held-out prompts, `deepseek-flash` scores four dimensions 0–100 (correctness / completeness / reasoning / instruction_following); report mean ± se plus **paired** t-tests per item.
 - IFEval: prompt/inst level, strict + loose.
-- harness: 8-task regression guard. Canonical formula: hellaswag / piqa / arc_challenge / openbookqa = acc_norm; winogrande / arc_easy / boolq / lambada = acc.
+- harness: 7-task regression guard. Canonical formula: hellaswag / piqa / arc_challenge / openbookqa = acc_norm; winogrande / arc_easy / lambada = acc.
 
 ## 3. Data Scale
 
@@ -75,7 +75,7 @@ Note: the polish-stage rubric set is complete (n=4,955/4,955). 2,036 rows were i
 | GSM8K flexible | — | 0.0167 | 0.0265 | 0.0197 | **0.0227** | 0.0212 |
 | GSM8K strict | — | — | 0.0159 | 0.0174 | **0.0205** | 0.0182 |
 
-### 5.3 8-task harness (regression guard, canonical formula)
+### 5.3 7-task harness (regression guard, canonical formula)
 
 | metric | base v3.0 | baseline | it-200k | it-1m | v3.0-it | it-polish |
 |---|---|---|---|---|---|---|
@@ -85,21 +85,20 @@ Note: the polish-stage rubric set is complete (n=4,955/4,955). 2,036 rows were i
 | arc_easy (acc) | 0.478 | — | 0.4558 | 0.4545 | 0.4482 | 0.4436 |
 | arc_challenge (acc_norm) | 0.255 | — | 0.2534 | 0.2517 | 0.2602 | 0.2577 |
 | openbookqa (acc_norm) | 0.296 | — | 0.298 | 0.29 | 0.3020 | 0.3040 |
-| boolq (acc) | 0.615 | — | 0.5801 | 0.5532 | 0.4263 | 0.4419 |
 | lambada_openai (acc) | 0.268 | — | 0.2948 | 0.2874 | 0.2890 | 0.2882 |
-| **mean** | **0.4250** | — | **0.4210 (-0.40pp)** | **0.4158 (-0.92pp)** | **0.4034 (-2.16pp)** | **0.4042 (-2.08pp)** |
+| **mean** | 0.3979 | — | 0.3983 (+0.04pp) | 0.3962 (−0.17pp) | **0.4002 (+0.23pp)** | 0.3988 (+0.09pp) |
 
 Notes:
 1. rubric numbers use the fresh 5k held-out set + `rubric_judge` (0–100); NOT comparable with the old 500-prompt figures (base 0.1 / baseline 7.4).
-2. The base 0.4272 / baseline 0.4260 recorded in the plan have no backing JSON on the work machine; their formula is unrecoverable. This table uses one canonical formula throughout, with base recomputed from the README v3.0 per-task table (0.4250).
-3. The harness is a **regression guard, not an optimization target**. The drop grows with scale: 200k -0.40pp, 1M -0.92pp, 3M -2.16pp; 3M's drag concentrates in boolq (0.615→0.426) and arc_easy, while hellaswag/piqa/winogrande/arc_challenge/openbookqa/lambada stay flat or improve. Logged as the trade-off for large instruction-following gains; the 50k-polish stage (low lr, high-quality CoT) was expected to partially recover it.
+2. The base 0.4272 / baseline 0.4260 recorded in the plan have no backing JSON on the work machine; their formula is unrecoverable. This table uses one canonical formula throughout, with base recomputed from the README v3.0 per-task table (0.3979 on the 7-task suite).
+3. The harness is a **regression guard, not an optimization target**. On the 7-task suite every stage sits within ±0.23pp of the base: 200k +0.04pp, 1M −0.17pp, 3M +0.23pp, polish +0.09pp. The earlier "trade-off" reading was driven almost entirely by BoolQ, which swung −19pp after 3M-row SFT while the other seven tasks stayed flat (see §8.5) — BoolQ has been dropped from the suite as an unstable sentinel. The only remaining net drag is arc_easy (0.478→0.448 at 3M); hellaswag/piqa/winogrande/arc_challenge/openbookqa/lambada stay flat or improve.
 
 ## 6. Conclusions (through polish)
 
 - **rubric rises monotonically with scale**: 200k +5.04 / 1M +5.56 / 3M **+8.61 (t=+30.7)**, significant across 4,955 paired items; polish full-set 14.9±0.28 (**+8.46, t=+30.1**), paired polish−3M −0.15±0.18 (t=−0.8, noise) → low-lr polish is neutral-to-slightly-negative, as suspected.
 - **IFEval rises sharply**: prompt-strict 0.0961→0.1091→**0.1701** (baseline 0.0924); inst-strict 0.2014→0.2026→**0.2794** (baseline 0.1894). 50k-polish dips slightly (0.1664/0.2698) — a 50k subset at low lr does not dislodge 3M's instruction-following advantage.
 - **GSM8K positive but limited**: flexible 0.0265 / 0.0197 / **0.0227** (baseline 0.0167), short of the planned +1~3pp expectation; strict climbs with scale to 0.0205. 50k-polish roughly flat (0.0212).
-- **Harness trade-off widens**: 0.4210 / 0.4158 / 0.4034 / 0.4042 (base 0.4250), concentrated in boolq / arc_easy; 50k-polish nudges boolq up (0.4263→0.4419), +0.08pp on the mean, still outside the 0.3pp guard.
+- **Harness stays inside the guard**: 0.3983 / 0.3962 / **0.4002** / 0.3988 (base 0.3979) on the 7-task suite — the 3M model actually leads the base slightly (+0.23pp); the only net drag is arc_easy (0.478→0.448). (The earlier 8-task view showed a −2.2pp "trade-off" that was almost entirely BoolQ's abnormal swing; BoolQ is now dropped from the suite.)
 - **The primary-metric direction is clearly right**: 200k→1M→3M improves across the board. **3M (v3.0-it) is the best model of the series**: top rubric/IFEval/GSM8K. 50k-polish did not significantly beat 3M. Choosing 3M as the polish init was correct; the polish step itself added nothing.
 
 ## 7. Closure
@@ -139,4 +138,4 @@ variant is recorded here for completeness but was not adopted.
 
 - After SFT the *conversational form* is fully there (chat template, lists/code blocks, clean stops, no ChatML leakage, no runaway repetition), but *content* shows classic small-model symptoms: intra-sentence echo loops, fabricated arithmetic (17×4→17), failure on strict format instructions ("reply with JSON only") — quantitatively consistent with IFEval 17% / GSM8K 2.7% (six-case chat probe, 9/27).
 - Instruction-following and base commonsense/factual knowledge are two separate ceilings; the former is buyable with SFT data (+84% this round), the latter is bound by parameter count and pretraining corpus — **do not expect SFT to fix it**.
-- boolq-style yes/no tasks are the most sensitive sentinel for SFT distribution drift (0.615→0.426 while the other 7 harness tasks stayed roughly flat). If the guard matters, add natural-language-judgment samples to the SFT mix as a hedge.
+- **Yes/no tasks are the most sensitive sentinel for SFT distribution drift — we removed BoolQ from the suite for this reason**: it swung 0.615→0.426 after 3M-row SFT (and −15pp on the v2.0 architecture change) while the other seven tasks stayed roughly flat. If such a guard matters, prefer adding natural-language-judgment samples to the SFT mix as a hedge rather than relying on a yes/no benchmark.

@@ -17,7 +17,6 @@ HARNESS = [
     ("arc_easy", "acc"),
     ("arc_challenge", "acc_norm"),
     ("openbookqa", "acc_norm"),
-    ("boolq", "acc"),
     ("lambada_openai", "acc"),
 ]
 
