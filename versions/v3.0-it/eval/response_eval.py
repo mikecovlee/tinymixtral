@@ -26,7 +26,6 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-AUTH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 JUDGE_URL = os.environ.get("JUDGE_URL", "https://api.deepseek.com/v1/chat/completions")
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "deepseek-flash")
 
@@ -50,9 +49,7 @@ def get_key():
     k = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("JUDGE_API_KEY")
     if k:
         return k
-    if AUTH.exists():
-        return json.loads(AUTH.read_text(encoding="utf-8"))["deepseek"]["key"]
-    raise SystemExit("no judge key: set DEEPSEEK_API_KEY (or ~/.local/share/opencode/auth.json)")
+    raise SystemExit("no judge key: set DEEPSEEK_API_KEY (or JUDGE_API_KEY)")
 
 
 def call_judge(key, prompt, a, b, retries=5, url=None, model=None):

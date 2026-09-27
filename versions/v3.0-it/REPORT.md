@@ -26,7 +26,7 @@
 - Initialized from base; seq_len 1024, batch_size 24, lr 2e-5 cosine (100-step warmup), bf16 + gradient checkpointing, 1 epoch.
 - **Fix**: the tokenize/pack stage switched from Python int lists to numpy int32, cutting 1M peak RAM from 40GB to ~21GB and eliminating the swap-7/7 thrash.
 
-### 2.3 Evaluation (fully offloaded to the work machine, `<EVAL_HOST>`)
+### 2.3 Evaluation (run on a separate GPU box)
 
 - rubric: 4,955 fresh held-out prompts, `deepseek-flash` scores four dimensions 0–100 (correctness / completeness / reasoning / instruction_following); report mean ± se plus **paired** t-tests per item.
 - IFEval: prompt/inst level, strict + loose.
@@ -107,7 +107,7 @@ Notes:
 1. ~~3M training + eval~~ (done: trained to 9/26 15:05, results pulled 22:34).
 2. ~~50k-polish training~~ (done: 9/26 23:15, 1,099 steps / 24.5m, init=3M final → `checkpoints/sft_polish/step_0001099_final`).
 3. ~~polish evaluation~~ (done: 9/27 07:27 the eval chain finished, auto-pulled, `data/eval/final_table.md` produced 07:28; only the rubric was missing 2,036 rows, see §5.1 note).
-4. ~~Commit tooling~~ (done: commit `966fead`, 44 files — `train_sft.py` numpy-int32 memory patch + `publish_hf.py` tokenizer whitelist + data-build / training / eval-offload scripts).
+4. ~~Commit tooling~~ (done: commit `966fead`, 44 files — `train_sft.py` numpy-int32 memory patch + `publish_hf.py` tokenizer whitelist + data-build / training / eval scripts).
 5. ~~Fill polish columns into §5 tables + per-gate verdict~~ (done: rubric PASS, IFEval PASS, GSM8K positive, harness guard exceedance logged; verdict = 3M is the champion).
 6. ~~Last open item: DeepSeek top-up → complete the 2,036 polish rubric rows → refresh tables~~ (**done**: 9/27 resume, complete 4,955/4,955 at 11:17, final_table.md refreshed; conclusion unchanged = **ship v3.0-it**, 50k-polish does not beat 3M on any primary metric). **Campaign closed, nothing outstanding.**
 
@@ -126,7 +126,6 @@ Notes:
 - **Python int lists are a memory bomb**: the tokenize intermediate of 856k × ~974-token examples ≈ 23–46GB; 1M's first attempt thrashed swap 7/7 at the packing stage. After the numpy int32 patch, peak went 40GB→21GB (committed with `966fead`). Default data pipelines to numpy/arrow, never native int lists.
 - **glibc arena retention**: 3M ran the whole job at RSS ~42GB, stable and harmless (free was only ~1GB); the correct signal is swap no longer growing. Do not kill jobs based on RSS alone.
 - **Throughput baseline**: seq1024 / bs24 stable (21.6GB VRAM) at ~0.745 steps/s. 200k 4,447 steps = 1.7h; 1M 26,857 steps = 10.0h; 3M 60,159 steps = 22.3h. Schedule accordingly.
-- **Marker + waiter automation was the biggest engineering win**: SFT_1M_DONE → auto-start 3M (14s later) → auto publish + scp + remote eval; zero GPU idle time, 48h unattended. Every job over 2h should use this pattern (outer shell printing `START/rc=/DONE` markers).
 
 ### 8.3 Evaluation methodology
 
@@ -135,12 +134,10 @@ Notes:
 - **Partial data ≠ random data**: the 2,036 missing polish rubric rows were all at id≥3022 (generation order = the harder tail); the interim 15.43 was inflated, the completed 14.86 flipped the conclusion (polish does not beat 3M). **Judge files must pass a coverage check before any verdict** (final_table-style tools should assert n-completeness).
 - **Silent skipping is a bug-class anti-pattern**: rubric_judge.py retried failed API calls 4 times, then skipped them without writing a row and still exited rc=0 — an entire 402-insufficient-balance round "succeeded". Batch eval scripts must **fail fast or write a failure manifest**, never silently drop samples.
 
-### 8.4 Eval-box (Windows work machine) operations
+### 8.4 Evaluation-machine operations
 
-- **Inline PowerShell over ssh with nested quotes fails silently** (no tmux session, no log, no error) → put all remote logic into .ps1 files and scp them.
-- **tmux launch without `*> log` redirection loses the markers**: during the polish resume run the DONE marker never landed, the local waiter waited in vain, and the finish had to be done manually.
-- **Remote python stdout is block-buffered**: once redirected to a file, tqdm/progress is invisible; judge progress by output-file size and mtime (gen stage: .jsonl bytes against the ~7.3MB / 4,955-row reference).
-- **Keep the API key on the eval box**: the local judge key is blocked by the CC safety net (auth.json unreadable), so local re-judging is impossible; running generation + scoring on the work machine (where the key lives) is the correct architecture. Also: run a minimal API probe before any external-API batch (a 402 pre-probe would have saved an entire resume round).
+- **Redirected process stdout is block-buffered**: once redirected to a file, tqdm/progress is invisible; judge progress by output-file size and mtime (gen stage: .jsonl bytes against the ~7.3MB / 4,955-row reference).
+- **Keep the API key on the machine where evaluation runs**, and run a minimal API probe before any external-API batch (a 402 pre-probe would have saved an entire resume round).
 
 ### 8.5 Model capability boundary (477M total / 276M active)
 

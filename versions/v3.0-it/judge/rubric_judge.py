@@ -15,7 +15,6 @@ from pathlib import Path
 
 import requests
 
-AUTH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 URL = os.environ.get("JUDGE_URL", "https://api.deepseek.com/v1/chat/completions")
 MODEL = os.environ.get("JUDGE_MODEL", "deepseek-flash")
 DIMS = ("correctness", "completeness", "reasoning", "instruction_following")
@@ -43,9 +42,7 @@ def get_key():
     k = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("JUDGE_API_KEY")
     if k:
         return k
-    if AUTH.exists():
-        return json.load(open(AUTH))["deepseek"]["key"]
-    raise SystemExit("no judge key: set DEEPSEEK_API_KEY (or ~/.local/share/opencode/auth.json)")
+    raise SystemExit("no judge key: set DEEPSEEK_API_KEY (or JUDGE_API_KEY)")
 
 
 def call(key, prompt, answer, retries=4, url=None, model=None):

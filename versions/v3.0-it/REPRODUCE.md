@@ -74,9 +74,8 @@ Notes (see lessons 8.2 in the report):
   `Packing...` and thrashed swap. RSS went from ~40 GB to ~21 GB with the patch.
 - Late-training process RSS of ~42 GB is glibc arena retention — normal, do not kill.
 - Measured throughput ~0.745 steps/s (seq 1024, bs 24). The runner prints
-  `SFT_<scale>_DONE` markers (e.g. `SFT_3m_DONE`); chaining these markers with small
-  polling waiters gives an unattended cascade (that is how the campaign actually ran;
-  the ad-hoc waiters were campaign scaffolding and are not shipped).
+  `SFT_<scale>_DONE` markers (e.g. `SFT_3m_DONE`) that can be used to chain jobs
+  in any scheduler.
 - `--seed`, `--resume`, `--grad-accum` and `--keep-last` are supported by
   train_sft.py (verified by an on-GPU smoke: seeded reruns produce identical loss
   sequences; resume replays the exact data position).
@@ -147,9 +146,9 @@ sensitive (0.615→0.426). The 50k-polish (50k rows, lr 5e-6, init=3M) verified 
 gain (paired −0.15, t=−0.8) and is not needed to reproduce 3M. See
 `REPORT.md` (incl. §8 Lessons Learned).
 
-## 5. One-click cascade reference
+## 5. Chaining steps
 
-The campaign ran unattended by chaining marker → waiter: run_sft.sh 1m → (SFT_1m_DONE)
-→ 3m → (SFT_3m_DONE) → publish → gen/rubric/lm-eval → final_table. Reproduction can
-simply run each step above manually; the ad-hoc waiter scripts were campaign scaffolding
-and were removed from the tree (kept in git history).
+The runner's `SFT_<scale>_DONE` markers (plus the `rc=` lines each script prints)
+can be consumed by any scheduler or a few lines of polling glue to run the ladder
+unattended: run_sft.sh 200k → 1m → 3m → publish → gen/rubric/lm-eval → final_table.
+Each step can equally be run manually.
