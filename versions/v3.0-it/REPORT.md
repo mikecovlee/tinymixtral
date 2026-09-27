@@ -91,7 +91,7 @@ Note: the polish-stage rubric set is complete (n=4,955/4,955; after the DeepSeek
 | **mean** | **0.4250** | — | **0.4210 (-0.40pp)** | **0.4158 (-0.92pp)** | **0.4034 (-2.16pp)** | **0.4042 (-2.08pp)** |
 
 Notes:
-1. rubric numbers use the fresh 5k held-out set + `rubric_judge2` (0–100); NOT comparable with the old 500-prompt figures (base 0.1 / baseline 7.4).
+1. rubric numbers use the fresh 5k held-out set + `rubric_judge` (0–100); NOT comparable with the old 500-prompt figures (base 0.1 / baseline 7.4).
 2. The base 0.4272 / baseline 0.4260 recorded in the plan have no backing JSON on the work machine; their formula is unrecoverable. This table uses one canonical formula throughout, with base recomputed from the README v3.0 per-task table (0.4250).
 3. The harness is a **regression guard, not an optimization target**. The drop grows with scale: 200k -0.40pp, 1M -0.92pp, 3M -2.16pp; 3M's drag concentrates in boolq (0.615→0.426) and arc_easy, while hellaswag/piqa/winogrande/arc_challenge/openbookqa/lambada stay flat or improve. Logged as the trade-off for large instruction-following gains; the 50k-polish stage (low lr, high-quality CoT) was expected to partially recover it.
 
@@ -107,7 +107,7 @@ Notes:
 
 1. ~~3M training + eval~~ (done: trained to 9/26 15:05, results pulled 22:34).
 2. ~~50k-polish training~~ (done: 9/26 23:15, 1,099 steps / 24.5m, init=3M final → `checkpoints/sft_polish/step_0001099_final`).
-3. ~~polish evaluation~~ (done: 9/27 07:27 `OFFLOAD_ARM_DONE`, auto-pulled, `data/dpo/final_table.md` produced 07:28; only the rubric was missing 2,036 rows, see §5.1 note).
+3. ~~polish evaluation~~ (done: 9/27 07:27 the eval chain finished, auto-pulled, `data/eval/final_table.md` produced 07:28; only the rubric was missing 2,036 rows, see §5.1 note).
 4. ~~Commit tooling~~ (done: commit `966fead`, 44 files — `train_sft.py` numpy-int32 memory patch + `publish_hf.py` tokenizer whitelist + data-build / training / eval-offload scripts).
 5. ~~Fill polish columns into §5 tables + per-gate verdict~~ (done: rubric PASS, IFEval PASS, GSM8K positive, harness guard exceedance logged; verdict = 3M is the champion).
 6. ~~Last open item: DeepSeek top-up → complete the 2,036 polish rubric rows → refresh tables~~ (**done**: 9/27 resume, complete 4,955/4,955 at 11:17, final_table.md refreshed; conclusion unchanged = **ship v3.0-it**, 50k-polish does not beat 3M on any primary metric). **Campaign closed, nothing outstanding.**
@@ -134,7 +134,7 @@ Notes:
 - **Paired tests + large samples are the lifeline**: the rubric judge is coarse (scores cluster in 0–25); 500 samples cannot separate arms. With 4,955 per-id pairs, t-values reach 19–31 and even a 0.5-point 200k/1M gap resolves. **Set the acceptance gates before running eval** (this round preregistered Δ≥+0.5 and t>2, avoiding post-hoc metric shopping).
 - **Metric formulas must be preregistered verbatim**: the legacy base 0.4272 / baseline 0.4260 numbers were voided — no JSON archives, formula unrecoverable; acc vs acc_norm differs by 3.5pp on arc_easy alone. Only after fixing one canonical formula (hellaswag/piqa/arc_challenge/openbookqa = acc_norm, rest = acc) did base/200k–polish become comparable. **Any number entering a comparison table must be stored together with its formula**.
 - **Partial data ≠ random data**: the 2,036 missing polish rubric rows were all at id≥3022 (generation order = the harder tail); the interim 15.43 was inflated, the completed 14.86 flipped the conclusion (polish does not beat 3M). **Judge files must pass a coverage check before any verdict** (final_table-style tools should assert n-completeness).
-- **Silent skipping is a bug-class anti-pattern**: rubric_judge2.py retried failed API calls 4 times, then skipped them without writing a row and still exited rc=0 — an entire 402-insufficient-balance round "succeeded". Batch eval scripts must **fail fast or write a failure manifest**, never silently drop samples.
+- **Silent skipping is a bug-class anti-pattern**: rubric_judge.py retried failed API calls 4 times, then skipped them without writing a row and still exited rc=0 — an entire 402-insufficient-balance round "succeeded". Batch eval scripts must **fail fast or write a failure manifest**, never silently drop samples.
 
 ### 8.4 Eval-box (Windows work machine) operations
 

@@ -51,7 +51,7 @@ def harness_rows(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default="data/dpo")
+    ap.add_argument("--dir", default="data/eval")
     ap.add_argument("--detailed", action="store_true")
     args = ap.parse_args()
 

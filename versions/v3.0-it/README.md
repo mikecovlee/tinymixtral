@@ -67,4 +67,4 @@ t = AutoTokenizer.from_pretrained("mikecovlee/tinymixtral-it")
 ```
 
 To retrain from scratch see `REPRODUCE.md`; to reproduce the evaluation see
-`eval/run_offload_arm.sh` (Linux) or `eval/run_offload_arm.ps1` (Windows).
+§3 of `REPRODUCE.md` (`eval/response_eval.py` + `judge/rubric_judge.py` + lm-eval).

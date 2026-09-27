@@ -1,16 +1,15 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
-"""Win-rate evaluation of two checkpoints with an external LLM judge.
+"""Response generation + pairwise win-rate evaluation with an external LLM judge.
 
 Stages:
   gen   : greedy-generate one response per held-out prompt for a model (GPU)
-  judge : pairwise compare two response files with DeepSeek, both A/B orders
+  judge : pairwise compare two response files with an LLM judge, both A/B orders
           (position-bias controlled), concurrency 2
 
 Usage:
-    python scripts/dpo_eval_judge.py gen   --model publish/8b-sft --out data/dpo/eval_sft.jsonl
-    python scripts/dpo_eval_judge.py gen   --model publish/8b-dpo --out data/dpo/eval_dpo.jsonl
-    python scripts/dpo_eval_judge.py judge --a data/dpo/eval_sft.jsonl --b data/dpo/eval_dpo.jsonl
+    python versions/v3.0-it/eval/response_eval.py gen   --model publish/<model> --out data/eval/gen_<model>.jsonl
+    python versions/v3.0-it/eval/response_eval.py judge --a data/eval/gen_<model_a>.jsonl --b data/eval/gen_<model_b>.jsonl
 """
 
 import argparse
@@ -142,14 +141,13 @@ def stage_judge(args):
     n_win = n_tie = n_loss = 0
 
     def work(i):
-        rng = random.Random(i)
-        sft, dpo = A[i]["response"], B[i]["response"]
-        # order 1: A=sft, B=dpo ; order 2: A=dpo, B=sft
-        w1 = call_judge(key, A[i]["prompt"], sft, dpo, url=url, model=model)
-        w2 = call_judge(key, A[i]["prompt"], dpo, sft, url=url, model=model)
-        # normalize to "who wins: sft/dpo/tie"
-        v1 = {"A": "sft", "B": "dpo", "tie": "tie"}[w1]
-        v2 = {"A": "dpo", "B": "sft", "tie": "tie"}[w2]
+        resp_a, resp_b = A[i]["response"], B[i]["response"]
+        # order 1: judge sees (A, B); order 2: judge sees (B, A)
+        w1 = call_judge(key, A[i]["prompt"], resp_a, resp_b, url=url, model=model)
+        w2 = call_judge(key, A[i]["prompt"], resp_b, resp_a, url=url, model=model)
+        # normalize to "who wins: A/B/tie" (A = --a file, B = --b file)
+        v1 = {"A": "A", "B": "B", "tie": "tie"}[w1]
+        v2 = {"A": "B", "B": "A", "tie": "tie"}[w2]
         verdict = v1 if v1 == v2 else "tie"
         return {"id": i, "w1": w1, "w2": w2, "verdict": verdict}
 
@@ -159,17 +157,17 @@ def stage_judge(args):
             r = fut.result()
             fout.write(json.dumps(r, ensure_ascii=False) + "\n")
             fout.flush()
-            if r["verdict"] == "dpo":
+            if r["verdict"] == "B":
                 n_win += 1
-            elif r["verdict"] == "sft":
+            elif r["verdict"] == "A":
                 n_loss += 1
             else:
                 n_tie += 1
     fout.close()
     total = n_win + n_tie + n_loss
     dec = n_win + n_loss
-    print(f"DPO wins={n_win} ties={n_tie} losses={n_loss} (n={total})")
-    print(f"win-rate (excl ties) = {n_win/max(dec,1):.3f} | tie-rate = {n_tie/max(total,1):.3f}")
+    print(f"B wins={n_win} ties={n_tie} losses={n_loss} (n={total})")
+    print(f"B win-rate (excl ties) = {n_win/max(dec,1):.3f} | tie-rate = {n_tie/max(total,1):.3f}")
 
 
 def main():
@@ -178,7 +176,10 @@ def main():
 
     g = sub.add_parser("gen")
     g.add_argument("--model", required=True)
-    g.add_argument("--prompts", default="data/dpo/prompts_heldout.parquet")
+    g.add_argument(
+        "--prompts",
+        default=str(Path(__file__).resolve().parents[1] / "eval_prompts" / "heldout_prompts_5k.parquet"),
+    )
     g.add_argument("--out", required=True)
     g.add_argument("--batch-size", type=int, default=8)
     g.add_argument("--max-new-tokens", type=int, default=448)
@@ -187,7 +188,7 @@ def main():
     j = sub.add_parser("judge")
     j.add_argument("--a", required=True)
     j.add_argument("--b", required=True)
-    j.add_argument("--out", default="data/dpo/eval_judgments.jsonl")
+    j.add_argument("--out", default="data/eval/judgments.jsonl")
     j.add_argument("--concurrency", type=int, default=2)
     j.add_argument("--base-url", default=None)
     j.add_argument("--judge-model", default=None)

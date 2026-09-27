@@ -41,10 +41,9 @@ Key points (`data/build_dataset.py`):
 - Outputs: `train.parquet / dev.parquet / heldout_prompts.parquet / stats.json / LICENSE_NOTES`.
 - Runtime reference: v2 ≈ 40 min, v3 ≈ 42 min (see `elapsed_s` in stats.json).
 - The fixed evaluation prompt set ships with the repo:
-  **`eval_prompts/heldout_prompts_id_1k5.parquet`** (4,955 rows, columns `id/prompt/ntok`,
+  **`eval_prompts/heldout_prompts_5k.parquet`** (4,955 rows, columns `id/prompt/ntok`,
   sha256 `6f8e48e67c592f830615ecc942b46aee3090eec3f827838227db0a5c12b2fdc8`).
-  Copy it to the eval box under `data/sft_200k/`; every arm uses the same file so the
-  paired comparisons stay valid.
+  Every model is evaluated on this same file so the paired comparisons stay valid.
 
 ## 2. Training (versions/v3.0-it/run_sft.sh, started from the base — no warm start)
 
@@ -65,38 +64,59 @@ Notes (see lessons 8.2 in the report):
   `Packing...` and thrashed swap. RSS went from ~40 GB to ~21 GB with the patch.
 - Late-training process RSS of ~42 GB is glibc arena retention — normal, do not kill.
 - Measured throughput ~0.745 steps/s (seq 1024, bs 24). The runner prints
-  `SFTV<N>_DONE` markers; chaining these markers with small polling waiters gives an
-  unattended cascade (that is how the campaign actually ran; the ad-hoc waiters were
-  campaign scaffolding and are not shipped).
+  `SFT_<scale>_DONE` markers (e.g. `SFT_3m_DONE`); chaining these markers with small
+  polling waiters gives an unattended cascade (that is how the campaign actually ran;
+  the ad-hoc waiters were campaign scaffolding and are not shipped).
 - `--seed`, `--resume`, `--grad-accum` and `--keep-last` are supported by
   train_sft.py (verified by an on-GPU smoke: seeded reruns produce identical loss
   sequences; resume replays the exact data position).
 
-## 3. Evaluation chain (publish → transfer → eval box gen/rubric/lm-eval → pull back → table)
+## 3. Evaluation chain (publish -> gen/rubric/lm-eval -> table, single machine)
 
 ```bash
-EVAL_USER=<user> EVAL_HOST=<host> EVAL_REPO=<remote-repo-root> \
-  bash versions/v3.0-it/eval/offload_arm.sh v3.0-it sftv2v3 checkpoints/sft_3m/step_0060159_final
-#   -> publish/v3.0-it (pytorch_model.bin + whitelisted tokenizer files; asserts no model.safetensors)
-#   -> scp to the eval box publish/ and print the tmux launch command
-# On the eval box (Windows example):
-tmux new-session -d -s sftv2v3 "powershell -NoProfile -ExecutionPolicy Bypass -File <repo>\versions\v3.0-it\eval\run_offload_arm.ps1 -Arm v3.0-it -Tag sftv2v3"
-# On the eval box (Linux equivalent):
-bash versions/v3.0-it/eval/run_offload_arm.sh v3.0-it sftv2v3
-#   Both run: GEN3 generation (dpo_eval_judge.py gen, 4,955 held-out prompts) -> RUBRIC3
-#   (rubric_judge2.py, deepseek-flash 0-100, 4 dimensions, concurrency 8)
-#   -> HARNESS / IFEVAL / GSM8K (lm_eval); completion marker OFFLOAD_ARM_DONE.
-#   Poll the marker, then copy data/dpo + evals JSONs back.
-python versions/v3.0-it/eval/final_table.py --dir data/dpo                # markdown comparison table (paired rubric t-test + 3 lm-evals + canonical harness)
-python versions/v3.0-it/eval/summarize_evals.py --dir data/dpo --detailed # per-task detail
+# 1) Export the trained checkpoint to HF format (tokenizer whitelist; asserts no model.safetensors)
+python scripts/publish_hf.py --checkpoint checkpoints/sft_3m/step_0060159_final \
+  --output publish/v3.0-it --tokenizer <tokenizer-dir>
+
+# 2) Generate responses on the fixed 4,955-prompt held-out set
+python versions/v3.0-it/eval/response_eval.py gen --model publish/v3.0-it \
+  --prompts versions/v3.0-it/eval_prompts/heldout_prompts_5k.parquet \
+  --out data/eval/gen_v3.0-it.jsonl --batch-size 8 --max-new-tokens 448
+
+# 3) Rubric scoring (deepseek-flash, 0-100, 4 dimensions; needs DEEPSEEK_API_KEY)
+python versions/v3.0-it/judge/rubric_judge.py --responses data/eval/gen_v3.0-it.jsonl \
+  --out data/eval/rubric_v3.0-it.jsonl --limit 5000 --concurrency 8
+
+# 4) lm-eval: 8-task harness / ifeval / gsm8k
+python -m lm_eval --model hf \
+  --model_args pretrained=publish/v3.0-it,tokenizer=publish/v3.0-it,trust_remote_code=True,dtype=bfloat16 \
+  --tasks hellaswag,piqa,winogrande,arc_easy,arc_challenge,openbookqa,boolq,lambada_openai \
+  --batch_size 16 --device cuda --output_path evals/harness/v3.0-it
+#   ... same with --tasks ifeval --apply_chat_template --batch_size 8 -> evals/ifeval/v3.0-it
+#   ... and with --tasks gsm8k --batch_size 8 -> evals/gsm8k/v3.0-it
+
+# 5) Consolidate (copy each newest evals/<task>/<model>/.../results_*.json to
+#    data/eval/<task>_<model>.json first)
+python versions/v3.0-it/eval/final_table.py --dir data/eval                # markdown comparison table (paired rubric t-test + 3 lm-evals + canonical harness)
+python versions/v3.0-it/eval/summarize_evals.py --dir data/eval --detailed # per-task detail
 ```
 
+Optional pairwise win-rate between two models:
+`response_eval.py judge --a data/eval/gen_<A>.jsonl --b data/eval/gen_<B>.jsonl`
+(reports B win-rate with both judge orders to control position bias).
+
+**Optional: multi-machine evaluation.** If the training box has no GPU to spare, copy
+the `publish/<model>` directory (~1.9 GB) to any CUDA box (24 GB class is enough; the
+campaign used a Windows A5000), run steps 2-4 there (step 3 needs `DEEPSEEK_API_KEY`
+on that box), then copy the `data/eval` artifacts back and run step 5 locally. No
+special scripts are required for this split.
+
 Preregistered methodology (see lessons 8.3 in the report):
-- **Rubric**: same 4,955 held-out prompts, same judge (rubric_judge2 + deepseek-flash),
-  **per-item paired** t-test against the reference arm.
+- **Rubric**: same 4,955 held-out prompts, same judge (`rubric_judge.py` + deepseek-flash),
+  **per-item paired** t-test against the reference model.
 - **Canonical harness formula**: acc_norm for hellaswag/piqa/arc_challenge/openbookqa,
   acc for winogrande/arc_easy/boolq/lambada, simple mean of the 8 (base v3.0 = 0.4250).
-- rubric_judge2 **silently skips** items whose API call fails after 4 retries — always
+- `rubric_judge.py` **silently skips** items whose API call fails after 4 retries — always
   verify output row count == prompt count (polish once missed 2,036 rows; root cause API 402;
   fix: `--resume` fills exactly the missing ids).
 
@@ -115,11 +135,11 @@ Known trade-off: data scaling greatly improves instruction following and open-en
 quality (rubric, IFEval) but regresses basic discrimination tasks; boolq is the most
 sensitive (0.615→0.426). The 50k-polish (50k rows, lr 5e-6, init=3M) verified as no
 gain (paired −0.15, t=−0.8) and is not needed to reproduce 3M. See
-`docs/SFT_V3_REPORT.md` (incl. §8 Lessons Learned).
+`REPORT.md` (incl. §8 Lessons Learned).
 
 ## 5. One-click cascade reference
 
-The campaign ran unattended by chaining marker → waiter: run_sft.sh 1m → (SFT_1M_DONE)
-→ v3 → (SFT_3M_DONE) → publish+scp+tmux eval → (OFFLOAD_ARM_DONE) → pull artifacts →
-final_table. Reproduction can simply run each step above manually; the ad-hoc waiter
-scripts were campaign scaffolding and were removed from the tree (kept in git history).
+The campaign ran unattended by chaining marker → waiter: run_sft.sh 1m → (SFT_1m_DONE)
+→ 3m → (SFT_3m_DONE) → publish → gen/rubric/lm-eval → final_table. Reproduction can
+simply run each step above manually; the ad-hoc waiter scripts were campaign scaffolding
+and were removed from the tree (kept in git history).

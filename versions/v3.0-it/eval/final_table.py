@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""Consolidate V1/V2/V3 eval artifacts (data/dpo) into one markdown comparison table.
+"""Consolidate per-model eval artifacts (data/eval) into one markdown comparison table.
 
-Usage: python versions/v3.0-it/eval/final_table.py [--dir data/dpo] [--ref sft] [--arms sft sftv2v1 ...]
+Usage: python versions/v3.0-it/eval/final_table.py [--dir data/eval] [--ref <ref-model>] [--models <model> ...]
 """
 import argparse
 import glob
@@ -20,7 +20,6 @@ HARNESS = [
     ("boolq", "acc"),
     ("lambada_openai", "acc"),
 ]
-PREFERRED = ["sft", "sftv2v1", "sftv2v2", "sftv2v3", "sftv4"]
 
 
 def load_json(path):
@@ -114,33 +113,36 @@ def fmt(x, nd=4):
 
 def discover(directory):
     found = set()
-    for pat, pre in (("rubric2v2_*.jsonl", "rubric2v2_"), ("harness_*.json", "harness_")):
+    for pat, pre in (("rubric_*.jsonl", "rubric_"), ("harness_*.json", "harness_")):
         for p in glob.glob(os.path.join(directory, pat)):
             base = os.path.basename(p)[len(pre):]
             found.add(base.rsplit(".jsonl", 1)[0].rsplit(".json", 1)[0])
-    return [a for a in PREFERRED if a in found] + sorted(found - set(PREFERRED))
+    return sorted(found)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default="data/dpo")
-    ap.add_argument("--ref", default="sft")
-    ap.add_argument("--arms", nargs="*", default=None)
+    ap.add_argument("--dir", default="data/eval")
+    ap.add_argument("--ref", default=None, help="reference model name (default: first model)")
+    ap.add_argument("--models", nargs="*", default=None, help="model names (default: discover in --dir)")
     args = ap.parse_args()
 
-    arms = args.arms or discover(args.dir)
-    rub = {a: load_rubric(os.path.join(args.dir, f"rubric2v2_{a}.jsonl")) for a in arms}
-    ref_rows = rub.get(args.ref, {})
+    models = args.models or discover(args.dir)
+    if args.ref and args.ref in models:
+        models = [args.ref] + [m for m in models if m != args.ref]
+    ref_name = args.ref or (models[0] if models else "")
+    rub = {a: load_rubric(os.path.join(args.dir, f"rubric_{a}.jsonl")) for a in models}
+    ref_rows = rub.get(ref_name, {})
 
-    print("| arm | rubric mean | rubric vs {} (Δ±se, t, n) | IFEval p-str | IFEval i-str | GSM8K strict | GSM8K flex | harness |".format(args.ref))
+    print("| model | rubric mean | rubric vs {} (Δ±se, t, n) | IFEval p-str | IFEval i-str | GSM8K strict | GSM8K flex | harness |".format(ref_name))
     print("|---|---|---|---|---|---|---|---|")
-    for a in arms:
+    for a in models:
         m, se, n = mean_se(list(rub[a].values())) if rub[a] else (float("nan"), float("nan"), 0)
-        if a != args.ref and ref_rows and rub[a]:
+        if a != ref_name and ref_rows and rub[a]:
             dm, dse, t, dn = paired(rub[a], ref_rows)
             rub_vs = f"{dm:+.2f}±{dse:.2f}, t={t:+.1f}, n={dn}"
         else:
-            rub_vs = "ref" if a == args.ref else "—"
+            rub_vs = "ref" if a == ref_name else "—"
         ifv = ifeval_vals(load_json(os.path.join(args.dir, f"ifeval_{a}.json")))
         gsv = gsm8k_vals(load_json(os.path.join(args.dir, f"gsm8k_{a}.json")))
         hm = harness_mean(load_json(os.path.join(args.dir, f"harness_{a}.json")))
