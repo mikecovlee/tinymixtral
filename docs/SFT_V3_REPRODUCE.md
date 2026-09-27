@@ -11,7 +11,8 @@
   DeepSeek API key 位于 `%USERPROFILE%\.local\share\opencode\auth.json`（`deepseek` 项）。
   仓库路径 `C:\Users\<user>\tinymixtral-improve`，长任务一律 tmux + 落地 .ps1（不要内联嵌套引号）。
 - **基座**：v3.0 base。两种来源任选：
-  - HF：`~/.cache/huggingface/hub/models--mikecovlee--tinymixtral/snapshots/<rev>/`（tokenizer 也取自这里，脚本内 SNAP 变量即此路径）
+  - HF：`~/.cache/huggingface/hub/models--mikecovlee--tinymixtral/snapshots/6e0792c1781d3c704c9f9a3844662998795b306c/`
+    （即公开仓库 `mikecovlee/tinymixtral` main revision；tokenizer 也取自这里，脚本内 SNAP 变量即此路径）
   - 原始：`checkpoints/base_v3_raw/`（含 `config.json` + `pytorch_model.bin`）
 - HF 下载走代理：`export HTTPS_PROXY=http://10.31.0.14:7890`（评测机上的 7890 端口）。
 
@@ -33,8 +34,9 @@ python scripts/build_sft_v2.py --out-dir data/sft_v2_v3 --scale v3   # 目标 3M
   held-out 集做 n-gram 去污染（`--decontam` 默认开）。
 - 产出：`train.parquet / dev.parquet / heldout_prompts.parquet / stats.json / LICENSE_NOTES`。
 - 运行时长参考：v2 约 40 分钟、v3 约 42 分钟（stats.json 内有 elapsed_s）。
-- 评测用的固定 prompt 集为 **heldout_prompts_id_1k5.parquet**（约 4,955 条，带 id 列），
-  需 scp 到评测机 `data/sft_v2_v1/` 下（战役各臂共用同一份，保证 paired 可比）。
+- 评测用的固定 prompt 集已随仓库提供：**`eval_prompts/heldout_prompts_id_1k5.parquet`**
+  （4,955 条，列 `id/prompt/ntok`，sha256 `6f8e48e67c592f830615ecc942b46aee3090eec3f827838227db0a5c12b2fdc8`）。
+  clone 后 scp 到评测机 `data/sft_v2_v1/` 下（战役各臂共用同一份，保证 paired 可比）。
 
 ## 2. 训练（dpo_scripts/run_sftvN.sh，从 base 起训，非 warm-start）
 
