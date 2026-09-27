@@ -32,6 +32,11 @@ def main():
 
     pf = pq.ParquetFile(args.src)
     names = set(pf.schema_arrow.names)
+    missing = [c for c in ("conversations", "source") if c not in names]
+    if missing:
+        raise SystemExit(
+            f"--src is missing column(s) {missing}; expected the output of data/build_dataset.py"
+        )
     cols = [c for c in ["conversations", "source", "category", "lang", "n_turns"] if c in names]
     writer = None
     t0 = time.time()

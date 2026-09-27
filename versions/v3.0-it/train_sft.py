@@ -14,6 +14,7 @@ Usage:
 import argparse
 import math
 import numpy as np
+import os
 import random
 import sys
 import time
@@ -121,6 +122,8 @@ def main():
                    help="periodic checkpoints to keep (0 = keep all; *_final never pruned)")
     args = p.parse_args()
 
+    if str(args.device).startswith("cpu"):
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
     if args.grad_accum < 1:
         raise SystemExit("--grad-accum must be >= 1")
     micro_per_step = args.grad_accum
@@ -136,6 +139,8 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if device.type == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
     print(f"Device: {device}", flush=True)
 
     print(f"Loading tokenizer from {args.tokenizer_path}...", flush=True)
@@ -249,7 +254,10 @@ def main():
             input_ids = all_ids[batch_idx].long().to(device)
             labels = all_labels[batch_idx].long().to(device)
 
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+            if device.type == "cuda":
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                    out = model(input_ids, labels=labels)
+            else:
                 out = model(input_ids, labels=labels)
 
             loss = out["loss"]
