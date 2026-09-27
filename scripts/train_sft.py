@@ -126,7 +126,10 @@ def main():
     micro_per_step = args.grad_accum
     if args.seed is not None:
         torch.manual_seed(args.seed)
-        torch.cuda.manual_seed_all(args.seed)
+        try:
+            torch.cuda.manual_seed_all(args.seed)
+        except Exception:
+            pass
         random.seed(args.seed)
         np.random.seed(args.seed)
 
