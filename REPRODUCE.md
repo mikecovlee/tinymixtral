@@ -69,6 +69,8 @@ v3.0 card's "Reproduce the data pools" section.
 | Wikipedia | [`wikimedia/wikipedia`](https://huggingface.co/datasets/wikimedia/wikipedia) (`20231101.en`) | v3.0, v1.1-1b post-train, v2.0-beta post-train |
 | C4 | [`allenai/c4`](https://huggingface.co/datasets/allenai/c4) (`en`) | v1.0 pretrain |
 
+License notes for every source: [`docs/DATA_LICENSES.md`](docs/DATA_LICENSES.md).
+
 ## 3. Train
 
 ```bash

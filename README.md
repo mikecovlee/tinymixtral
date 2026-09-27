@@ -29,6 +29,7 @@ Dataset sources: [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fin
 [OpenWebMath](https://huggingface.co/datasets/open-web-math/open-web-math),
 [Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia) (`20231101.en`); v1.0 used
 [C4](https://huggingface.co/datasets/allenai/c4) (`en`).
+Per-source licenses and caveats: [docs/DATA_LICENSES.md](docs/DATA_LICENSES.md).
 
 ## Benchmark Comparison
 
