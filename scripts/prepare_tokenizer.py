@@ -53,6 +53,8 @@ def save_hf_tokenizer(tokenizer_object, output_dir):
         unk_token="<unk>",
         pad_token="<pad>",
     )
+    tokenizer = apply_chat_template(tokenizer)
+    tokenizer = apply_chat_template(tokenizer)
     tokenizer.save_pretrained(output_dir)
     print(f"HF tokenizer saved to {output_dir}")
     return tokenizer
