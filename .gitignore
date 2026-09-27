@@ -41,3 +41,8 @@ publish*/
 # Agent/tooling state
 .omo/
 .codegraph/
+# local run logs / campaign scratch (never commit - 22GB)
+dpo_local/
+dpo_local2/
+rloo_final/
+logs/
