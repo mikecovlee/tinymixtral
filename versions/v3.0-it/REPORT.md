@@ -1,4 +1,4 @@
-# v3.0-it SFT Training & Evaluation Report (Closed: shipped model = v3.0-it)
+# TinyMixtral v3.0 Instruction-tuned — Training & Evaluation Report
 
 > Status: complete. 200k/1M/3M/polish all trained and evaluated; final verdict in §6.
 
@@ -52,9 +52,9 @@
 
 ## 5. Evaluation Results
 
-### 5.1 rubric (primary metric, 4,955 paired fresh held-out prompts, 0–100)
+### 5.1 Rubric (primary metric, 4,955 paired fresh held-out prompts, 0–100)
 
-| dimension | baseline | it-200k | it-1m | v3.0-it | it-polish |
+| Dimension | baseline | it-200k | it-1m | v3.0-it | it-polish |
 |---|---|---|---|---|---|
 | correctness | 7.6 | 12.3 | 12.8 | 14.6 | 14.5 |
 | completeness | 6.3 | 11.3 | 11.7 | 14.6 | 14.4 |
@@ -68,7 +68,7 @@ Note: the polish-stage rubric set is complete (n=4,955/4,955). 2,036 rows were i
 
 ### 5.2 IFEval / GSM8K (primary metrics)
 
-| metric | base v3.0 | baseline | it-200k | it-1m | v3.0-it | it-polish |
+| Metric | base v3.0 | baseline | it-200k | it-1m | v3.0-it | it-polish |
 |---|---|---|---|---|---|---|
 | IFEval prompt-strict | — | 0.0924 | 0.0961 | 0.1091 | **0.1701** | 0.1664 |
 | IFEval inst-strict | — | 0.1894 | 0.2014 | 0.2026 | **0.2794** | 0.2698 |
@@ -113,7 +113,7 @@ Notes:
    52.81 in the Qwen3 Technical Report (arXiv:2505.09388) — same protocol as ours.
    Neither publishes an official TruthfulQA MC2 score.
 
-## 6. Conclusions (through polish)
+## 6. Conclusions
 
 - **rubric rises monotonically with scale**: 200k +5.04 / 1M +5.56 / 3M **+8.61 (t=+30.7)**, significant across 4,955 paired items; polish full-set 14.9±0.28 (**+8.46, t=+30.1**), paired polish−3M −0.15±0.18 (t=−0.8, noise) → low-lr polish is neutral-to-slightly-negative, as suspected.
 - **IFEval rises sharply**: prompt-strict 0.0961→0.1091→**0.1701** (baseline 0.0924); inst-strict 0.2014→0.2026→**0.2794** (baseline 0.1894). 50k-polish dips slightly (0.1664/0.2698) — a 50k subset at low lr does not dislodge 3M's instruction-following advantage.
@@ -123,7 +123,7 @@ Notes:
 
 ## 7. Closure
 
-All planned steps were completed. The shipped model is **v3.0-it** (the 3M tier); the 50k-polish
+All planned steps were completed. The released model is **v3.0-it** (the 3M tier); the 50k-polish
 variant is recorded here for completeness but was not adopted.
 
 ## 8. Lessons Learned

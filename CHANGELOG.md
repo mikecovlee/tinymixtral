@@ -1,12 +1,12 @@
 # Changelog
 
-## tinymixtral-it (2026-09-27) — instruction-tuned release
+## v3.0-it / tinymixtral-it (2026-09-27) — instruction-tuned release
 
-Shipped model: `mikecovlee/tinymixtral-it` (HF Hub), shipped model `v3.0-it` (3M-row SFT).
+Released as `mikecovlee/tinymixtral-it` (HF Hub); internal name `v3.0-it` (3M-row SFT).
 
-- SFT campaign 200k→polish: from the v3.0 base, 1 epoch on progressively larger
+- SFT scale tiers 200k→polish: from the v3.0 base, 1 epoch on progressively larger
   decontaminated English mixtures (195k / 857k / 2.17M rows), polish = 50k-row
-  low-lr polish from the best arm.
+  low-lr polish from the best tier.
 - Headline vs the prior 50k-row SFT (paired, n=4,955 held-out prompts):
   LLM rubric +8.61 (t=+30.7), IFEval prompt-strict 0.0924→0.1701,
   inst-strict 0.1894→0.2794, GSM8K flexible 0.0167→0.0227.

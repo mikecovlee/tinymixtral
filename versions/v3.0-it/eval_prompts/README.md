@@ -1,7 +1,7 @@
 # Held-out Evaluation Prompts
 
 `heldout_prompts_5k.parquet` — the rubric evaluation prompt set used by the
-SFT campaign.
+v3.0-it SFT run.
 
 | field | detail |
 |---|---|
@@ -21,5 +21,5 @@ Provenance and usage:
   responses for every id, then `versions/v3.0-it/judge/rubric_judge.py` scores them
   0-100 on four dimensions.
 - The per-scale builds emit `data/sft_<scale>/heldout_prompts.parquet`; this
-  directory ships the exact `_id_1k5` variant used by the campaign because no
+  directory ships the exact `_id_1k5` variant used by that run because no
   tracked script regenerates that slice byte-identically.

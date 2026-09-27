@@ -15,10 +15,10 @@ with ~2.5× fewer parameters. Its instruction-tuned release is
 
 | Version | Params (total / active) | Experts | Data | Harness mean | Card |
 |---------|-------------------------|---------|------|:---:|---|
+| **v3.0-it** | 477.5M / 276.1M | 4 routed, top-2 | v3.0 + 2.17M SFT | **0.4002** | [versions/v3.0-it](versions/v3.0-it/README.md) |
 | **v3.0** | 477.5M / 276.1M | 4 routed, top-2 | 8.05B (6-source blend) | 0.3979 | [versions/v3.0](versions/v3.0/README.md) |
-| **v3.0-it** | 477.5M / 276.1M | 4 routed, top-2 | v3.0 + 2.17M SFT | **0.4002²** | [versions/v3.0-it](versions/v3.0-it/README.md) |
-| v1.1-1b | 1182M / 352M | 8 routed, top-2 | 4B → 8B (SmolLM blend) | 0.397 | [versions/v1.1-1b](versions/v1.1-1b/README.md) |
 | v2.0 beta | 498M / 241M | 1 shared + 6 routed | 4B (SmolLM blend) | 0.389 | [versions/v2.0-beta](versions/v2.0-beta/README.md) |
+| v1.1-1b | 1182M / 352M | 8 routed, top-2 | 4B → 8B (SmolLM blend) | 0.397 | [versions/v1.1-1b](versions/v1.1-1b/README.md) |
 | v1.1 | 432M / 176M | 6 routed, top-2 | 4B (SmolLM blend) | 0.381 | [versions/v1.1](versions/v1.1/README.md) |
 | v1.0 | 432M / 176M | 6 routed, top-2 | 4B (C4-en, legacy) | 0.378 | [versions/v1.0](versions/v1.0/README.md) |
 
@@ -26,7 +26,7 @@ Harness mean = lm-evaluation-harness v0.4.12, 0-shot, 7-task suite (BoolQ exclud
 abnormally across our own runs while the other seven tasks stayed stable; see
 [the report](versions/v3.0-it/REPORT.md)). See each card for full
 architecture tables, training recipes, per-task results and negative results.
-² v3.0-it is instruction-tuned: IFEval 0.1701/0.2794 and LLM rubric 15.0±0.3 rise sharply;
+v3.0-it is instruction-tuned: IFEval 0.1701/0.2794 and LLM rubric 15.0±0.3 rise sharply;
 on the 7-task suite it also edges the base (+0.23pp), with only ARC-Easy down (0.478 → 0.448) —
 see the [Instruction Tuning](#instruction-tuning) section.
 
@@ -44,18 +44,18 @@ Per-source licenses and caveats: [docs/DATA_LICENSES.md](docs/DATA_LICENSES.md).
 0-shot, 7-task suite (`acc_norm` for HellaSwag / ARC-Challenge / OpenBookQA, `acc` otherwise).
 Best per row in **bold**; `v1.1-1b` is the 1B MoE at 4B and 8B tokens.
 
-| Task | Metric | v3.0 | v3.0-it | v1.1-1b (8B) | v1.1-1b (4B) | v1.1 | v2.0 beta | v1.0¹ |
+| Task | Metric | v3.0-it | v3.0 | v2.0 beta | v1.1-1b (8B) | v1.1-1b (4B) | v1.1 | v1.0¹ |
 |------|--------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| HellaSwag | acc_norm | 0.335 | **0.340** | 0.329 | 0.311 | 0.308 | 0.326 | 0.310 |
-| PIQA | acc | **0.638** | 0.634 | 0.630 | 0.620 | 0.616 | 0.631 | 0.613 |
-| WinoGrande | acc | 0.515 | **0.528** | 0.523 | 0.510 | 0.524 | 0.506 | 0.508 |
-| ARC-Easy | acc | 0.478 | 0.448 | **0.479** | 0.463 | 0.456 | 0.474 | 0.422 |
-| ARC-Challenge | acc_norm | 0.255 | 0.260 | **0.279** | 0.273 | 0.247 | 0.272 | 0.247 |
-| OpenBookQA | acc_norm | 0.296 | 0.302 | 0.306 | 0.288 | 0.288 | 0.290 | **0.308** |
-| LAMBADA | acc | 0.268 | **0.289** | 0.234 | 0.200 | 0.227 | 0.224 | 0.240 |
-| **Mean** | — | 0.3979 | **0.4002** | 0.3971 | 0.3807 | 0.3809 | 0.3890 | 0.3783 |
-| MMLU | acc (5-shot) | 0.234 | **0.243** | — | — | — | — | — |
-| TruthfulQA | MC2 (0-shot) | **0.417** | 0.412 | — | — | — | — | — |
+| HellaSwag | acc_norm | **0.340** | 0.335 | 0.326 | 0.329 | 0.311 | 0.308 | 0.310 |
+| PIQA | acc | 0.634 | **0.638** | 0.631 | 0.630 | 0.620 | 0.616 | 0.613 |
+| WinoGrande | acc | **0.528** | 0.515 | 0.506 | 0.523 | 0.510 | 0.524 | 0.508 |
+| ARC-Easy | acc | 0.448 | 0.478 | 0.474 | **0.479** | 0.463 | 0.456 | 0.422 |
+| ARC-Challenge | acc_norm | 0.260 | 0.255 | 0.272 | **0.279** | 0.273 | 0.247 | 0.247 |
+| OpenBookQA | acc_norm | 0.302 | 0.296 | 0.290 | 0.306 | 0.288 | 0.288 | **0.308** |
+| LAMBADA | acc | **0.289** | 0.268 | 0.224 | 0.234 | 0.200 | 0.227 | 0.240 |
+| **Mean** | — | **0.4002** | 0.3979 | 0.3890 | 0.3971 | 0.3807 | 0.3809 | 0.3783 |
+| MMLU | acc (5-shot) | **0.243** | 0.234 | — | — | — | — | — |
+| TruthfulQA | MC2 (0-shot) | 0.412 | **0.417** | — | — | — | — | — |
 
 ¹ v1.0 is the legacy C4 baseline (earlier evaluation setup); shown for reference.
 BoolQ was dropped from the suite: it swung abnormally across our own runs (−15pp on the v2.0
@@ -72,18 +72,18 @@ MMLU/TruthfulQA measurably.
 
 Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot, cuda, bf16):
 
-| Task | Metric | v3.0 (477M) | v3.0-it (477M) | SmolLM2-360M | Qwen3-0.6B |
+| Task | Metric | v3.0-it (477M) | v3.0 (477M) | SmolLM2-360M | Qwen3-0.6B |
 |------|--------|:---:|:---:|:---:|:---:|
-| HellaSwag | acc_norm | 0.335 | 0.340 | 0.563 | 0.473 |
-| PIQA | acc | 0.638 | 0.634 | 0.719 | 0.673 |
-| WinoGrande | acc | 0.515 | 0.528 | 0.587 | 0.563 |
-| ARC-Easy | acc | 0.478 | 0.448 | 0.705 | 0.609 |
-| ARC-Challenge | acc_norm | 0.255 | 0.260 | 0.383 | 0.340 |
-| OpenBookQA | acc_norm | 0.296 | 0.302 | 0.372 | 0.316 |
-| LAMBADA | acc | 0.268 | 0.289 | 0.532 | 0.401 |
-| **Mean** | — | 0.3979 | **0.4002** | 0.5516 | 0.4821 |
-| MMLU | acc (5-shot) | 0.234 | 0.243 | 0.358* | 0.528† |
-| TruthfulQA | MC2 (0-shot) | 0.417 | 0.412 | — | — |
+| HellaSwag | acc_norm | 0.340 | 0.335 | 0.563 | 0.473 |
+| PIQA | acc | 0.634 | 0.638 | 0.719 | 0.673 |
+| WinoGrande | acc | 0.528 | 0.515 | 0.587 | 0.563 |
+| ARC-Easy | acc | 0.448 | 0.478 | 0.705 | 0.609 |
+| ARC-Challenge | acc_norm | 0.260 | 0.255 | 0.383 | 0.340 |
+| OpenBookQA | acc_norm | 0.302 | 0.296 | 0.372 | 0.316 |
+| LAMBADA | acc | 0.289 | 0.268 | 0.532 | 0.401 |
+| **Mean** | — | **0.4002** | 0.3979 | 0.5516 | 0.4821 |
+| MMLU | acc (5-shot) | 0.243 | 0.234 | 0.358* | 0.528† |
+| TruthfulQA | MC2 (0-shot) | 0.412 | 0.417 | — | — |
 
 SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 8.05B tokens
 (~500× and ~4500× less) for v3.0 on a single consumer GPU — the gap is primarily a data-budget
@@ -152,14 +152,16 @@ python scripts/chat.py --checkpoint checkpoints/<run>/<step>_final --tokenizer t
 
 One epoch of SFT from the v3.0 base on 2.17M decontaminated English conversations
 (10 public sources, `versions/v3.0-it/data/build_dataset.py`, lr 2e-5 cosine, seq 1024) produces
-**tinymixtral-it**: <https://huggingface.co/mikecovlee/tinymixtral-it>.
+**TinyMixtral v3.0 Instruction-tuned** (`v3.0-it`, released as [tinymixtral-it](https://huggingface.co/mikecovlee/tinymixtral-it)):
 
-| metric (0-shot) | base v3.0 | tinymixtral-it |
+| Metric | base v3.0 | v3.0-it |
 |---|---|---|
-| LLM rubric (4,955 held-out, 0-100) | - | 15.0 ± 0.3 (paired +8.61, t=+30.7 vs the prior 50k-row SFT) |
-| IFEval prompt-strict / inst-strict | - | 0.1701 / 0.2794 |
+| LLM rubric (4,955 held-out, 0-100) | — | 15.0 ± 0.3 (paired +8.61, t=+30.7 vs the prior 50k-row SFT) |
+| IFEval prompt-strict / inst-strict | — | 0.1701 / 0.2794 |
 | GSM8K flexible | 0.0167* | 0.0227 |
 | 7-task harness (canonical) | 0.3979 | 0.4002 |
+
+\* prior 50k-row SFT baseline (the paired reference); the pretrained base was not evaluated on GSM8K/rubric.
 
 Instruction following rose sharply while the 7-task harness edged up (+0.23pp); only ARC-Easy
 dipped (0.478 → 0.448) and the other six tasks are flat or up.

@@ -1,7 +1,7 @@
-# v3.0-it Reproduction Guide (v3.0 base → v3.0-it)
+# TinyMixtral v3.0 Instruction-tuned — Reproduction Guide (v3.0 base → v3.0-it)
 
 This document lists every command and parameter needed to reproduce **v3.0-it**
-from scratch. All scripts live under `versions/v3.0-it/` (branch `sft`); run every
+from scratch. All scripts live under `versions/v3.0-it/`; run every
 command from the repo root.
 
 ## 0. Environment
@@ -9,8 +9,8 @@ command from the repo root.
 - **Training box**: Linux, single GPU ≥24 GB (measured: RTX PRO 4500 32 GB), 60 GB RAM,
   conda environment per `.env.example` (`CONDA_ENV`), with torch 2.14.0+cu130,
   transformers 4.57.6, pyarrow, numpy, safetensors 0.8.0, lm_eval 0.4.12.
-- **Evaluation**: the same box is enough (any 24 GB-class GPU; the campaign also
-  used an A5000 on a second machine - see the optional note in §3). Needs the same
+- **Evaluation**: the same box is enough (any 24 GB-class GPU; an A5000 on a
+  second machine also works - see the optional note in §3). Needs the same
   Python env plus `lm_eval`, and a DeepSeek API key in `DEEPSEEK_API_KEY`. Evaluation is plain shell commands (see §3).
 - **Base model**: v3.0 base, either source works:
   - HF cache snapshot of the public repo `mikecovlee/tinymixtral` at revision
@@ -119,7 +119,7 @@ Optional pairwise win-rate between two models:
 
 **Optional: multi-machine evaluation.** If the training box has no GPU to spare, copy
 the `publish/<model>` directory (~1.9 GB) to any CUDA box (24 GB class is enough; the
-campaign used a Windows A5000), run steps 2-4 there (step 3 needs `DEEPSEEK_API_KEY`
+we used a Windows A5000), run steps 2-4 there (step 3 needs `DEEPSEEK_API_KEY`
 on that box), then copy the `data/eval` artifacts back and run step 5 locally. No
 special scripts are required for this split.
 
@@ -159,6 +159,6 @@ gain (paired −0.15, t=−0.8) and is not needed to reproduce 3M. See
 ## 5. Chaining steps
 
 The runner's `SFT_<scale>_DONE` markers (plus the `rc=` lines each script prints)
-can be consumed by any scheduler or a few lines of polling glue to run the ladder
+can be consumed by any scheduler or a few lines of polling glue to run the tiers
 unattended: run_sft.sh 200k → 1m → 3m → publish → gen/rubric/lm-eval → final_table.
 Each step can equally be run manually.
