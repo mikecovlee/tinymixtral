@@ -256,7 +256,7 @@ def main():
             if not torch.isfinite(loss):
                 opt.zero_grad(set_to_none=True)
                 micro = 0
-                print(f"  ⚠ step {step + 1}: non-finite loss, skipping", flush=True)
+                print(f"  [warn] step {step + 1}: non-finite loss, skipping", flush=True)
                 continue
 
             (loss / micro_per_step).backward()
