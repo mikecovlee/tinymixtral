@@ -12,7 +12,7 @@ SFT campaign.
 Provenance and usage:
 
 - Sampled as a held-out prompt set **before** training-set selection in
-  `scripts/data/build_dataset.py`, so no model in this repo was ever trained on any
+  `versions/v3.0-it/data/build_dataset.py`, so no model in this repo was ever trained on any
   of these prompts.
 - Shared by all arms (base, prior SFT, v1/v2/v3/v4) so rubric comparisons are
   **paired per prompt id** (see `versions/v3.0-it/judge/rubric_stats.py` and

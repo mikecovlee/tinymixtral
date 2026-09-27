@@ -21,13 +21,13 @@ branch `sft` (commits 966fead / af313a3 / 66728d6 plus the later tooling commits
   - raw checkpoint `checkpoints/base_v3_raw/` (`config.json` + `pytorch_model.bin`).
 - HF downloads may need a proxy: `export HTTPS_PROXY=http://<EVAL_HOST>:<PROXY_PORT>`.
 
-## 1. Data build (scripts/, on the training box)
+## 1. Data build (versions/v3.0-it/data/, on the training box)
 
 ```bash
-python scripts/data/prefetch_sources.py --out data/sft_src            # stage all 10 sources (large HF downloads)
-python scripts/data/build_dataset.py --out-dir data/sft_200k --scale v1 # target 200k -> actual 195,170 rows
-python scripts/data/build_dataset.py --out-dir data/sft_1m --scale v2 # target 1M   -> actual 856,805 rows
-python scripts/data/build_dataset.py --out-dir data/sft_3m --scale v3 # target 3M   -> actual 2,168,835 rows
+python versions/v3.0-it/data/prefetch_sources.py --out data/sft_src            # stage all 10 sources (large HF downloads)
+python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_200k --scale v1 # target 200k -> actual 195,170 rows
+python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_1m --scale v2 # target 1M   -> actual 856,805 rows
+python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_3m --scale v3 # target 3M   -> actual 2,168,835 rows
 ```
 
 Key points (`data/build_dataset.py`):

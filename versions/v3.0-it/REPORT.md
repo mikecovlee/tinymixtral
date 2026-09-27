@@ -1,12 +1,11 @@
 # v3.0-it SFT Training & Evaluation Report (Closed: shipped model = v3.0-it)
 
 > Status: campaign complete. 200k/1M/3M/polish all trained and evaluated; final verdict in §6/§7.
-> This document is the results report; the pre-registered plan and its ACTUALS live in `docs/SFT_V3_PLAN.md`.
 
 ## 1. Background & Goal
 
 - Base model: `v3.0` (477.5M total / 276.1M active parameters, MoE top-2 of 4), max_pos 2048, vocab 32000.
-- Prior findings: alignment attempts (DPO/GRPO/KTO/RLOO) showed no significant gain over base; the only large significant win came from `baseline` (rubric 0.1 → 7.4). `baseline` used only the first 50k rows of a 1M-row parquet (row-order bias), and answer-only data was shown to damage general ability.
+- `baseline` — an earlier, much smaller general-SFT run — is the paired reference in the tables below (rubric 6.40±0.18 on the 5k held-out set).
 - Goal: rebuild a larger, more balanced, higher-quality general SFT from base (**no Chinese data this round**):
   - 3M: 3M rows, 1 epoch;
   - polish: 50k high-quality CoT polish (lr 5e-6, 1 epoch).
@@ -14,7 +13,7 @@
 
 ## 2. Method
 
-### 2.1 Data construction (`scripts/data/build_dataset.py` / `scripts/make_it-polish.py`)
+### 2.1 Data construction (`versions/v3.0-it/data/build_dataset.py` / `versions/v3.0-it/data/sample_subset.py`)
 
 - Unified schema: `conversations=[{from:human|gpt, value}]` + `source/category/lang/n_turns`.
 - Filtering: assistant spans 10–2048 tokens; exact-hash dedup + MinHash-LSH near-dup dedup (Jaccard ≥ 0.8); global shuffle; per-source share ≤ 15%.
@@ -116,7 +115,7 @@ Notes:
 
 ### 8.1 Data & training strategy
 
-- **Narrow-slice data damages ability — it is not merely 'no gain'**: exam3 (answer-only math) scored rubric 1.2, paired −5.81 (t=−7.2). SFT data must keep full explanatory answers; math share must stay small and process-bearing.
+- **Narrow-slice data damages ability — it is not merely 'no gain'**: answer-only or single-style data was observed to *lower* general ability, not just fail to help. SFT data must keep full explanatory answers; math share must stay small and process-bearing.
 - **Row-order bias is an invisible trap**: baseline historically took only the first 50k rows of a 1M parquet (unshuffled) — effectively training on a narrow slice. That is the main reason it plateaued at rubric 6.4 while 200k gained +5.04 purely from better data composition. **Always globally shuffle before sampling from large datasets** (built into this round's builder).
 - **This scale axis is far from saturated**: 195k→857k→2.17M rows gave rubric 11.4→12.0→15.0 and IFEval 0.096→0.109→0.170. The 1M→3M jump was the largest (+3.0), indicating **data composition (tulu3 multi-turn instruction share) matters more than raw scale**.
 - **Low-lr polish buys nothing**: polish (50k math/long-form @ lr 5e-6, 1,099 steps) sat within noise of 3M on every primary metric (paired rubric −0.15±0.18). For a model at this size, a polish stage extracts nothing — cut it next time and spend the budget on main training data.

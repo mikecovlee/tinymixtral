@@ -2,7 +2,7 @@
 
 ## tinymixtral-it (2026-09-27) — instruction-tuned release
 
-Shipped model: `mikecovlee/tinymixtral-it` (HF Hub), trained arm `v3.0-it` (3M-row SFT).
+Shipped model: `mikecovlee/tinymixtral-it` (HF Hub), shipped model `v3.0-it` (3M-row SFT).
 
 - SFT campaign 200k→polish: from the v3.0 base, 1 epoch on progressively larger
   decontaminated English mixtures (195k / 857k / 2.17M rows), polish = 50k-row
@@ -13,7 +13,7 @@ Shipped model: `mikecovlee/tinymixtral-it` (HF Hub), trained arm `v3.0-it` (3M-r
 - Known trade-off: canonical 8-task harness 0.4250→0.4034, concentrated in
   boolq; documented honestly in `docs/SFT_V3_REPORT.md`.
 - Tooling: `versions/v3.0-it/data/build_dataset.py` (quota/dedup/decontam pipeline),
-  `scripts/train_sft.py` + `--seed/--resume/--grad-accum/--keep-last`,
+  `versions/v3.0-it/train_sft.py` + `--seed/--resume/--grad-accum/--keep-last`,
   `tools/{sft,eval,judge}` campaign chain, `docs/DATA_LICENSES.md`,
   `eval_prompts/` pinned held-out set, numerical parity tests
   `model/` vs `hf/`, English docs (`docs/SFT_V3_{PLAN,REPORT,REPRODUCE}.md`).
