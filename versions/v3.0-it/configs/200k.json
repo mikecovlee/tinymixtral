@@ -1,0 +1,15 @@
+{
+  "model_checkpoint": "checkpoints/base_v3_raw",
+  "tokenizer_path": "<HF snapshot of mikecovlee/tinymixtral>",
+  "epochs": 1,
+  "seq_len": 1024,
+  "batch_size": 24,
+  "warmup_steps": 100,
+  "weight_decay": 0.1,
+  "dataset": "data/sft_200k/train.parquet",
+  "max_samples": 195170,
+  "lr": 2e-05,
+  "save_every": 1000,
+  "log_every": 100,
+  "output_dir": "checkpoints/sft_200k"
+}

@@ -35,10 +35,13 @@ def build(cfg) -> TinyMixtralForCausalLM:
 @pytest.fixture(scope="module")
 def old_modeling(tmp_path_factory):
     """从 git 1b_topk 基线加载改动前的 modeling.py 为独立模块。"""
-    src = subprocess.run(
-        ["git", "-C", str(ROOT), "show", "42b09f1:model/modeling.py"],
-        capture_output=True, text=True, encoding="utf-8", check=True,
-    ).stdout
+    try:
+        src = subprocess.run(
+            ["git", "-C", str(ROOT), "show", "42b09f1:model/modeling.py"],
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("historical baseline commit 42b09f1 not reachable in this clone")
     pkg_root = tmp_path_factory.mktemp("oldpkg")
     pkg = pkg_root / "oldmodeling"
     pkg.mkdir(parents=True)

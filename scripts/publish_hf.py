@@ -78,8 +78,9 @@ def main():
 
     # 5. tokenizer
     if args.tokenizer:
+        keep = ("tokenizer", "vocab", "merges", "special_tokens_map.json", "chat_template.jinja")
         for f in Path(args.tokenizer).iterdir():
-            if f.is_file():
+            if f.is_file() and any(f.name.startswith(k) or f.name == k for k in keep):
                 shutil.copy(f, output / f.name)
         print(f"Copied tokenizer from {args.tokenizer}")
 

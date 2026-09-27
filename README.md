@@ -29,6 +29,7 @@ Dataset sources: [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fin
 [OpenWebMath](https://huggingface.co/datasets/open-web-math/open-web-math),
 [Wikipedia](https://huggingface.co/datasets/wikimedia/wikipedia) (`20231101.en`); v1.0 used
 [C4](https://huggingface.co/datasets/allenai/c4) (`en`).
+Per-source licenses and caveats: [docs/DATA_LICENSES.md](docs/DATA_LICENSES.md).
 
 ## Benchmark Comparison
 
@@ -126,6 +127,24 @@ python scripts/chat_hf.py mikecovlee/tinymixtral   # from HF Hub
 python scripts/chat.py --checkpoint checkpoints/<run>/<step>_final --tokenizer tokenizer/   # native loader
 ```
 
+## Instruction Tuning
+
+One epoch of SFT from the v3.0 base on 2.17M decontaminated English conversations
+(10 public sources, `versions/v3.0-it/data/build_dataset.py`, lr 2e-5 cosine, seq 1024) produces
+**tinymixtral-it**: <https://huggingface.co/mikecovlee/tinymixtral-it>.
+
+| metric (0-shot) | base v3.0 | tinymixtral-it |
+|---|---|---|
+| LLM rubric (4,955 held-out, 0-100) | - | 15.0 ± 0.3 (paired +8.61, t=+30.7 vs the prior 50k-row SFT) |
+| IFEval prompt-strict / inst-strict | - | 0.1701 / 0.2794 |
+| GSM8K flexible | 0.0167* | 0.0227 |
+| 8-task harness (canonical) | 0.4250 | 0.4034 |
+
+The harness drop is a real trade-off concentrated in boolq (0.615 -> 0.426):
+instruction following rose sharply while multiple-choice common-sense regressed.
+Full campaign record, methodology and lessons: `versions/v3.0-it/REPORT.md`;
+reproduction: `versions/v3.0-it/REPRODUCE.md`. (*prior-arm reference)
+
 ## Project Structure
 
 ```
@@ -136,14 +155,15 @@ tinymixtral/
 ├── shared_expert/  # v2.0 shared-expert ablation (model + scripts)
 ├── versions/       # per-version bundles: card + config + version-specific scripts
 │   ├── v3.0/       # README.md, configs/, scripts/ (run_segment.ps1, run_pilot.ps1, analyze_pilot.py)
+│   ├── v3.0-it/    # instruction-tuned release: REPORT/REPRODUCE, train_sft.py, run_sft.sh, eval/, judge/, data/, configs/, eval_prompts/
 │   ├── v1.1-1b/    # README.md, configs/v1b_moe.json
 │   ├── v2.0-beta/  # README.md
 │   ├── v1.1/       # README.md
 │   └── v1.0/       # README.md
 ├── scripts/        # shared tooling: train/resume/prepare_data(+_local)/download_{parquets,jsonl_zst}/mix_data/make_blend_shards/publish_hf/chat/val_ppl/…
 ├── configs/        # hardware profile + shared config dirs
-├── evals/          # evaluation outputs
-├── docs/
+├── evals/          # legacy eval outputs (run-local lm-eval results)
+├── docs/           # DATA_LICENSES.md (dataset provenance)
 ├── tests/
 ├── requirements.txt
 └── LICENSE

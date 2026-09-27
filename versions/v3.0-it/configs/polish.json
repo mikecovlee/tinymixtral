@@ -1,0 +1,15 @@
+{
+  "model_checkpoint": "<init: final checkpoint of a prior tier>",
+  "tokenizer_path": "<HF snapshot of mikecovlee/tinymixtral>",
+  "epochs": 1,
+  "seq_len": 1024,
+  "batch_size": 24,
+  "warmup_steps": 100,
+  "weight_decay": 0.1,
+  "dataset": "data/sft_polish/train.parquet",
+  "max_samples": 50000,
+  "lr": 5e-06,
+  "save_every": 500,
+  "log_every": 50,
+  "output_dir": "checkpoints/sft_polish"
+}
