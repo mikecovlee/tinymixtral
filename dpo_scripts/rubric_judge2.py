@@ -15,9 +15,9 @@ from pathlib import Path
 
 import requests
 
-AUTH = Path(os.environ.get("USERPROFILE", os.path.expanduser("~"))) / ".local" / "share" / "opencode" / "auth.json"
-URL = "https://api.deepseek.com/v1/chat/completions"
-MODEL = "deepseek-flash"
+AUTH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+URL = os.environ.get("JUDGE_URL", "https://api.deepseek.com/v1/chat/completions")
+MODEL = os.environ.get("JUDGE_MODEL", "deepseek-flash")
 DIMS = ("correctness", "completeness", "reasoning", "instruction_following")
 
 SYS = (
@@ -40,18 +40,24 @@ TMPL = "Question:\n{q}\n\nAssistant answer:\n{a}\n\nScore 0-100 on each dimensio
 
 
 def get_key():
-    return json.load(open(AUTH))["deepseek"]["key"]
+    k = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("JUDGE_API_KEY")
+    if k:
+        return k
+    if AUTH.exists():
+        return json.load(open(AUTH))["deepseek"]["key"]
+    raise SystemExit("no judge key: set DEEPSEEK_API_KEY (or ~/.local/share/opencode/auth.json)")
 
 
-def call(key, prompt, answer, retries=4):
+def call(key, prompt, answer, retries=4, url=None, model=None):
+    url = url or URL
     msgs = [{"role": "system", "content": SYS},
             {"role": "user", "content": TMPL.format(q=prompt[:4000], a=answer[:4000])}]
     for i in range(retries):
-        payload = {"model": MODEL, "temperature": 0, "messages": msgs}
+        payload = {"model": model or MODEL, "temperature": 0, "messages": msgs}
         if i == 0:
             payload["response_format"] = {"type": "json_object"}
         try:
-            r = requests.post(URL,
+            r = requests.post(url,
                               headers={"Authorization": f"Bearer {key}",
                                        "Content-Type": "application/json"},
                               json=payload, timeout=90)
@@ -76,6 +82,8 @@ def main():
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--concurrency", type=int, default=6)
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--base-url", default=None)
+    p.add_argument("--judge-model", default=None)
     a = p.parse_args()
     key = get_key()
     items = [json.loads(l) for l in open(a.responses, encoding="utf-8") if l.strip()]
@@ -91,7 +99,8 @@ def main():
     fails = 0
     with open(a.out, "a" if a.resume else "w", encoding="utf-8") as f, \
             ThreadPoolExecutor(a.concurrency) as ex:
-        futs = {ex.submit(call, key, it["prompt"], it.get("response", "")): it for it in todo}
+        futs = {ex.submit(call, key, it["prompt"], it.get("response", ""),
+                          url=a.base_url, model=a.judge_model): it for it in todo}
         for i, fu in enumerate(futs):
             it = futs[fu]
             sc, reason = fu.result()

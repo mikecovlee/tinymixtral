@@ -27,9 +27,9 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-AUTH = Path(os.environ["USERPROFILE"]) / ".local" / "share" / "opencode" / "auth.json"
-JUDGE_URL = "https://api.deepseek.com/v1/chat/completions"
-JUDGE_MODEL = "deepseek-flash"
+AUTH = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+JUDGE_URL = os.environ.get("JUDGE_URL", "https://api.deepseek.com/v1/chat/completions")
+JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "deepseek-flash")
 
 SYS = ("You are a strict, impartial evaluator. Compare two responses to a user request "
        "and decide which is better on correctness, helpfulness, instruction-following, "
@@ -48,17 +48,24 @@ Which response is better? Output JSON only."""
 
 
 def get_key():
-    return json.loads(AUTH.read_text(encoding="utf-8"))["deepseek"]["key"]
+    k = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("JUDGE_API_KEY")
+    if k:
+        return k
+    if AUTH.exists():
+        return json.loads(AUTH.read_text(encoding="utf-8"))["deepseek"]["key"]
+    raise SystemExit("no judge key: set DEEPSEEK_API_KEY (or ~/.local/share/opencode/auth.json)")
 
 
-def call_judge(key, prompt, a, b, retries=5):
+def call_judge(key, prompt, a, b, retries=5, url=None, model=None):
+    url = url or JUDGE_URL
+    model = model or JUDGE_MODEL
     last = None
     for attempt in range(retries):
         try:
             r = requests.post(
-                JUDGE_URL,
+                url,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": JUDGE_MODEL, "temperature": 0.0, "max_tokens": 500,
+                json={"model": model, "temperature": 0.0, "max_tokens": 500,
                       "thinking": {"type": "disabled"},
                       "messages": [{"role": "system", "content": SYS},
                                    {"role": "user", "content": TMPL.format(prompt=prompt, a=a, b=b)}]},
@@ -128,6 +135,8 @@ def stage_judge(args):
     ids = [i for i in A if i in B and A[i]["response"].strip() and B[i]["response"].strip()]
     print(f"judge pairs: {len(ids)} (A={args.a}, B={args.b})", flush=True)
     key = get_key()
+    url = args.base_url or JUDGE_URL
+    model = args.judge_model or JUDGE_MODEL
     out = Path(args.out)
     fout = out.open("a", encoding="utf-8")
     n_win = n_tie = n_loss = 0
@@ -136,8 +145,8 @@ def stage_judge(args):
         rng = random.Random(i)
         sft, dpo = A[i]["response"], B[i]["response"]
         # order 1: A=sft, B=dpo ; order 2: A=dpo, B=sft
-        w1 = call_judge(key, A[i]["prompt"], sft, dpo)
-        w2 = call_judge(key, A[i]["prompt"], dpo, sft)
+        w1 = call_judge(key, A[i]["prompt"], sft, dpo, url=url, model=model)
+        w2 = call_judge(key, A[i]["prompt"], dpo, sft, url=url, model=model)
         # normalize to "who wins: sft/dpo/tie"
         v1 = {"A": "sft", "B": "dpo", "tie": "tie"}[w1]
         v2 = {"A": "dpo", "B": "sft", "tie": "tie"}[w2]
@@ -180,6 +189,8 @@ def main():
     j.add_argument("--b", required=True)
     j.add_argument("--out", default="data/dpo/eval_judgments.jsonl")
     j.add_argument("--concurrency", type=int, default=2)
+    j.add_argument("--base-url", default=None)
+    j.add_argument("--judge-model", default=None)
     j.set_defaults(func=stage_judge)
 
     args = p.parse_args()
