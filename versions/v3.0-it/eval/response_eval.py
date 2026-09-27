@@ -88,6 +88,7 @@ def call_judge(key, prompt, a, b, retries=5, url=None, model=None):
 
 def stage_gen(args):
     out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     done = set()
     if out.exists():
         for line in out.open(encoding="utf-8"):
@@ -137,6 +138,7 @@ def stage_judge(args):
     url = args.base_url or JUDGE_URL
     model = args.judge_model or JUDGE_MODEL
     out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     fout = out.open("a", encoding="utf-8")
     n_win = n_tie = n_loss = 0
 

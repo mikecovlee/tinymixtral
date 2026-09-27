@@ -1,33 +1,38 @@
 # v3.0-it Reproduction Guide (v3.0 base → v3.0-it)
 
 This document lists every command and parameter needed to reproduce **v3.0-it**
-(the delivered arm of the v3.0-it SFT campaign) from scratch. All scripts live on
-branch `sft` (commits 966fead / af313a3 / 66728d6 plus the later tooling commits).
+from scratch. All scripts live under `versions/v3.0-it/` (branch `sft`); run every
+command from the repo root.
 
 ## 0. Environment
 
 - **Training box**: Linux, single GPU ≥24 GB (measured: RTX PRO 4500 32 GB), 60 GB RAM,
   conda environment per `.env.example` (`CONDA_ENV`), with torch 2.14.0+cu130,
   transformers 4.57.6, pyarrow, numpy, safetensors 0.8.0, lm_eval 0.4.12.
-- **Evaluation box (offload)**: any box with a 24 GB-class GPU (measured: A5000),
-  a Python env with torch + lm_eval (`EVAL_PY`), and DeepSeek API access via the
-  `DEEPSEEK_API_KEY` environment variable (optional fallback:
-  `~/.local/share/opencode/auth.json`, `deepseek` entry). Run long jobs under tmux
-  with shipped `.ps1`/`.sh` files (never inline nested quotes).
+- **Evaluation**: the same box is enough (any 24 GB-class GPU; the campaign also
+  used an A5000 on a second machine - see the optional note in §3). Needs the same
+  Python env plus `lm_eval`, and a DeepSeek API key in `DEEPSEEK_API_KEY`
+  (optional fallback:
+  `~/.local/share/opencode/auth.json`, `deepseek` entry). Evaluation is plain shell commands (see §3).
 - **Base model**: v3.0 base, either source works:
   - HF cache snapshot of the public repo `mikecovlee/tinymixtral` at revision
     `6e0792c1781d3c704c9f9a3844662998795b306c` (the tokenizer comes from here too;
     the scripts resolve it via `TOKENIZER_SNAP`), or
   - raw checkpoint `checkpoints/base_v3_raw/` (`config.json` + `pytorch_model.bin`).
-- HF downloads may need a proxy: `export HTTPS_PROXY=http://<EVAL_HOST>:<PROXY_PORT>`.
+- HF downloads may need a proxy: `export HTTPS_PROXY=http://<proxy-host>:<port>`.
 
 ## 1. Data build (versions/v3.0-it/data/, on the training box)
 
 ```bash
-python versions/v3.0-it/data/prefetch_sources.py --out data/sft_src            # stage all 10 sources (large HF downloads)
-python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_200k --scale v1 # target 200k -> actual 195,170 rows
-python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_1m --scale v2 # target 1M   -> actual 856,805 rows
-python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_3m --scale v3 # target 3M   -> actual 2,168,835 rows
+python versions/v3.0-it/data/prefetch_sources.py --out data/sft_src  # stage all 10 sources (large HF downloads)
+
+PROMPTS=versions/v3.0-it/eval_prompts/heldout_prompts_5k.parquet
+python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_200k --scale 200k --extra-holdout $PROMPTS  # -> 195,170 rows
+python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_1m  --scale 1m  --extra-holdout $PROMPTS  # -> 856,805 rows
+python versions/v3.0-it/data/build_dataset.py --out-dir data/sft_3m  --scale 3m  --extra-holdout $PROMPTS  # -> 2,168,835 rows
+
+# optional: 50k polish-tier slice (stratified from the 3M train set; --scale v1|v2|v3 also accepted)
+python versions/v3.0-it/data/sample_subset.py --src data/sft_3m/train.parquet --out data/sft_polish
 ```
 
 Key points (`data/build_dataset.py`):
@@ -36,9 +41,11 @@ Key points (`data/build_dataset.py`):
   seed 42; no Chinese data.
 - Filtering: assistant reply 40–12,000 chars (~10–2048 tokens); per-source cap ≤15%.
 - Dedup: exact hash + MinHash-LSH (Jaccard ≥ 0.8).
-- Decontamination: n-gram removal against gsm8k / arc / openbookqa / hellaswag / piqa /
-  ifeval / mmlu / ceval(cmmlu) and the held-out set (`--decontam` on by default).
-- Outputs: `train.parquet / dev.parquet / heldout_prompts.parquet / stats.json / LICENSE_NOTES`.
+- Decontamination: 10-gram removal against 6 eval sets (gsm8k, ARC-Challenge,
+  ARC-Easy, OpenBookQA, HELLASWAG, PIQA) plus the fixed eval prompt set passed via
+  `--extra-holdout` (`--decontam` on by default).
+- Outputs: `train.parquet / dev.parquet / heldout_prompts.parquet / stats.json`
+  (per-source dataset licenses: `docs/DATA_LICENSES.md`).
 - Runtime reference: v2 ≈ 40 min, v3 ≈ 42 min (see `elapsed_s` in stats.json).
 - The fixed evaluation prompt set ships with the repo:
   **`eval_prompts/heldout_prompts_5k.parquet`** (4,955 rows, columns `id/prompt/ntok`,
@@ -50,11 +57,16 @@ Key points (`data/build_dataset.py`):
 ```bash
 CONDA_ENV=<env> bash versions/v3.0-it/run_sft.sh 200k   # 195,170 rows -> 106,718 packed 1024-seqs -> 4,447 steps, ~99 min
 CONDA_ENV=<env> bash versions/v3.0-it/run_sft.sh 1m   # 856,805 rows -> 644,557 seqs -> 26,857 steps, ~10.0 h
-CONDA_ENV=<env> bash versions/v3.0-it/run_sft.sh 3m   # 2,168,835 rows -> 1,443,804 seqs -> 60,159 steps, ~22.3 h
+CONDA_ENV=<env> bash versions/v3.0-it/run_sft.sh 3m     # 2,168,835 rows -> 1,443,804 seqs -> 60,159 steps, ~22.3 h
+# optional polish tier on top of a finished run:
+# CONDA_ENV=<env> bash versions/v3.0-it/run_sft.sh polish checkpoints/sft_3m/step_*_final
 ```
 
+`run_sft.sh` requires `CONDA_ENV`; `TOKENIZER_SNAP` (tokenizer dir or HF snapshot)
+is auto-resolved from the local `mikecovlee/tinymixtral` snapshot if unset.
+
 Unified hyperparameters (train_sft.py): `--epochs 1 --seq-len 1024 --lr 2e-5`
-(cosine + 3% warmup), `--batch-size 24 --wd 0.1`, bf16 autocast, gradient
+(cosine + 100-step warmup, `--warmup-steps 100`), `--batch-size 24 --wd 0.1`, bf16 autocast, gradient
 checkpointing, `--save-every 1000 --log-every 100`; output under
 `checkpoints/sft_{200k,1m,3m}/step_*_final`.
 

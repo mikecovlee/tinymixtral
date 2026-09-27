@@ -18,7 +18,7 @@ a single GPU. Shipped as `mikecovlee/tinymixtral-it` on the HF Hub.
 | `data/` | Dataset tooling: `prefetch_sources.py`, `build_dataset.py`, `sample_subset.py` |
 | `train_sft.py` | SFT trainer (packing, label masking, `--seed/--resume/--grad-accum/--keep-last`) |
 | `run_sft.sh` | Parameterized training entry (`200k|1m|3m|polish`) |
-| `eval/` | Offload eval chain: publish → generate → score → lm-eval → summary |
+| `eval/` | Evaluation chain: publish → generate → score → lm-eval → summary |
 | `judge/` | LLM rubric scoring + paired statistics |
 | `eval_prompts/` | Held-out rubric prompt set (4,955 rows, sha256-pinned) |
 
@@ -26,7 +26,7 @@ a single GPU. Shipped as `mikecovlee/tinymixtral-it` on the HF Hub.
 
 `data/build_dataset.py` blends 10 public instruction sources (per-source licenses in
 `docs/DATA_LICENSES.md`), with exact-hash + MinHash-LSH (Jaccard ≥ 0.8) dedup, global
-shuffle, per-source share caps, and 10-gram decontamination against 8 eval sets plus
+shuffle, per-source share caps, and 10-gram decontamination against 6 eval sets plus
 the held-out prompt set. No Chinese data. Scale ladder:
 
 | Tier | Rows | Packed seqs | Steps | Wall time |
@@ -36,7 +36,7 @@ the held-out prompt set. No Chinese data. Scale ladder:
 | **3m (shipped)** | **2,168,835** | **1,443,804** | **60,159** | **22.3 h** |
 | polish | 50,000 | 26,365 | 1,099 | 24.5 min |
 
-Training: from the v3.0 base (no warm start), lr 2e-5 cosine + 3% warmup, bf16 +
+Training: from the v3.0 base (no warm start), lr 2e-5 cosine + 100-step warmup, bf16 +
 gradient checkpointing, seq 1024, batch 24 (the max stable at 21.5 GB on a 32 GB
 RTX PRO 4500). The polish tier is a low-lr (5e-6) stratified subset run evaluated but
 **not shipped** (no gain over the 3M run).

@@ -17,13 +17,13 @@
 
 - Unified schema: `conversations=[{from:human|gpt, value}]` + `source/category/lang/n_turns`.
 - Filtering: assistant spans 10–2048 tokens; exact-hash dedup + MinHash-LSH near-dup dedup (Jaccard ≥ 0.8); global shuffle; per-source share ≤ 15%.
-- Decontamination: n-gram overlap removed against gsm8k / arc / obqa / hellaswag / piqa / ifeval / mmlu / ceval / cmmlu and the held-out set.
+- Decontamination: 10-gram overlap removed against gsm8k / ARC-Challenge / ARC-Easy / OpenBookQA / HELLASWAG / PIQA and the held-out set.
 - No Chinese data.
 - polish: stratified sample from the 3M training set (metamath 12k, orcamath 12k, omi2 8k, tulu3 10k, slimorca 8k).
 
 ### 2.2 Training (`versions/v3.0-it/train_sft.py`)
 
-- Initialized from base; seq_len 1024, batch_size 24, lr 2e-5 cosine (3% warmup), bf16 + gradient checkpointing, 1 epoch.
+- Initialized from base; seq_len 1024, batch_size 24, lr 2e-5 cosine (100-step warmup), bf16 + gradient checkpointing, 1 epoch.
 - **Fix**: the tokenize/pack stage switched from Python int lists to numpy int32, cutting 1M peak RAM from 40GB to ~21GB and eliminating the swap-7/7 thrash.
 
 ### 2.3 Evaluation (fully offloaded to the work machine, `<EVAL_HOST>`)
@@ -119,7 +119,7 @@ Notes:
 - **Row-order bias is an invisible trap**: baseline historically took only the first 50k rows of a 1M parquet (unshuffled) — effectively training on a narrow slice. That is the main reason it plateaued at rubric 6.4 while 200k gained +5.04 purely from better data composition. **Always globally shuffle before sampling from large datasets** (built into this round's builder).
 - **This scale axis is far from saturated**: 195k→857k→2.17M rows gave rubric 11.4→12.0→15.0 and IFEval 0.096→0.109→0.170. The 1M→3M jump was the largest (+3.0), indicating **data composition (tulu3 multi-turn instruction share) matters more than raw scale**.
 - **Low-lr polish buys nothing**: polish (50k math/long-form @ lr 5e-6, 1,099 steps) sat within noise of 3M on every primary metric (paired rubric −0.15±0.18). For a model at this size, a polish stage extracts nothing — cut it next time and spend the budget on main training data.
-- **Decontamination / held-out must come first**: n-gram decontam across all 8 eval sets plus a zero-overlap rubric held-out set; without it the 4,955-pair significance would be fake.
+- **Decontamination / held-out must come first**: n-gram decontam across all 6 eval sets plus a zero-overlap rubric held-out set; without it the 4,955-pair significance would be fake.
 
 ### 8.2 Training-box engineering (RTX PRO 4500 32GB / 60GB RAM)
 

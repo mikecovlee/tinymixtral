@@ -97,6 +97,7 @@ def main():
     sums = {k: 0 for k in DIMS}
     n = 0
     fails = 0
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "a" if a.resume else "w", encoding="utf-8") as f, \
             ThreadPoolExecutor(a.concurrency) as ex:
         futs = {ex.submit(call, key, it["prompt"], it.get("response", ""),

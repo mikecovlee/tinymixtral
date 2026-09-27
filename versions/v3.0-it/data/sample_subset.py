@@ -1,8 +1,8 @@
-"""Build the V4 CoT-polish SFT set (50k) by stratified sampling from the V3 train set.
+"""Build the 50k CoT-polish SFT subset by stratified sampling from a 3M train set.
 
-V4 = small high-quality CoT polish at low lr (5e-6) on top of the best V1/V2/V3 arm.
-This just carves a reasoning-heavy 50k slice out of the already-deduped/decontaminated
-V3 train parquet, so no re-download or re-filtering is needed.
+The polish tier is a small reasoning-heavy slice trained at low lr (5e-6) on top of
+a finished ladder run. This carves a 50k slice out of the already-deduped /
+decontaminated 3M train parquet, so no re-download or re-filtering is needed.
 """
 import argparse
 import json

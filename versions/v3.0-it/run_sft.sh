@@ -11,6 +11,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 source "${CONDA_BASE:-$HOME/miniconda3}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV:?set CONDA_ENV to the training conda environment}"
 cd "$REPO_ROOT"
+mkdir -p logs
 if [ -z "${TOKENIZER_SNAP:-}" ]; then
   TOKENIZER_SNAP=$(ls -d "$HOME"/.cache/huggingface/hub/models--mikecovlee--tinymixtral/snapshots/*/ | head -1)
 fi

@@ -325,8 +325,8 @@ def build_eval_grams(enable, extra=None):
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out-dir", default="data/sft_v2")
-    ap.add_argument("--scale", choices=["v1", "v2", "v3", "pilot"], default="v1")
+    ap.add_argument("--out-dir", default="data/sft")
+    ap.add_argument("--scale", choices=["v1", "v2", "v3", "pilot", "200k", "1m", "3m"], default="v1")
     ap.add_argument("--pilot", type=int, default=0, help="override total sample target")
     ap.add_argument("--heldout", type=int, default=5000)
     ap.add_argument("--seed", type=int, default=42)
@@ -347,7 +347,9 @@ def main():
     _tw = sum(shares.values())
     shares = {k: v / _tw for k, v in shares.items()}
 
-    total = {"pilot": args.pilot or 10000, "v1": 200000, "v2": 1000000, "v3": 3000000}[args.scale]
+    _SCALE_ALIAS = {"200k": "v1", "1m": "v2", "3m": "v3"}
+    total = {"pilot": args.pilot or 10000, "v1": 200000, "v2": 1000000, "v3": 3000000}[
+        _SCALE_ALIAS.get(args.scale, args.scale)]
     if args.pilot:
         total = args.pilot
     out = Path(args.out_dir)
