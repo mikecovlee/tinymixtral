@@ -15,10 +15,11 @@ venv/
 # Pyenv
 .python-version
 
-# Generated — rebuild with scripts
-checkpoints/
-data/
-tokenizer/
+# Generated — rebuild with scripts (anchored to repo root so
+# versions/*/data/ source code stays addable)
+/checkpoints/
+/data/
+/tokenizer/
 
 # Eval outputs (source code in evals/ is tracked)
 evals/run/
@@ -36,13 +37,13 @@ results*.json
 .env/
 
 # Publish
-publish*/
+/publish*/
 
 # Agent/tooling state
 .omo/
 .codegraph/
 # local run logs / campaign scratch (never commit - 22GB)
-dpo_local/
-dpo_local2/
-rloo_final/
-logs/
+/dpo_local/
+/dpo_local2/
+/rloo_final/
+/logs/
