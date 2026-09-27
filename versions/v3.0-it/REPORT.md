@@ -1,6 +1,6 @@
 # v3.0-it SFT Training & Evaluation Report (Closed: shipped model = v3.0-it)
 
-> Status: campaign complete. 200k/1M/3M/polish all trained and evaluated; final verdict in §6/§7.
+> Status: complete. 200k/1M/3M/polish all trained and evaluated; final verdict in §6.
 
 ## 1. Background & Goal
 
@@ -48,7 +48,7 @@
 | 200k | 195,170 | 106,718 | 4,447 | 24 | 2e-5 | 99.4m |
 | 1M | 856,805 | 644,557 | 26,857 | 24 | 2e-5 | 9.97h |
 | 3M | 2,168,835 | 1,443,804 | 60,159 | 24 | 2e-5 | 22.3h (1337.8m) |
-| polish | 50,000 | 26,365 | 1,099 | 24 | 5e-6 | 24.5m (done 9/26 23:15, init=3M final) |
+| polish | 50,000 | 26,365 | 1,099 | 24 | 5e-6 | 24.5m (init=3M final) |
 
 ## 5. Evaluation Results
 
@@ -64,7 +64,7 @@
 | paired vs baseline | — | **+5.04±0.26 (t=+19.2)** | **+5.56±0.25 (t=+22.4)** | **+8.61±0.28 (t=+30.7)** | **+8.46±0.28 (t=+30.1)** |
 
 Preregistered gate: Δ ≥ +0.5 and t > 2 — 200k/1M/3M all pass by a wide margin, monotonically increasing with scale.
-Note: the polish-stage rubric set is complete (n=4,955/4,955; after the DeepSeek top-up on 9/27 10:48 the `--resume` fill run finished at 11:17). Root cause of the 2,036 missing rows: HTTP 402 insufficient balance, with failed items silently skipped; the interim value (15.4 at n=2,919) was inflated by front-subset bias. Full-set per-item paired difference polish−3M = **−0.15±0.18 (t=−0.8, within noise)** — polish does not beat 3M.
+Note: the polish-stage rubric set is complete (n=4,955/4,955). 2,036 rows were initially missing (API failures silently skipped — see the §8.3 lesson); the interim value (15.4 at n=2,919) was inflated by front-subset bias. Full-set per-item paired difference polish−3M = **−0.15±0.18 (t=−0.8, within noise)** — polish does not beat 3M.
 
 ### 5.2 IFEval / GSM8K (primary metrics)
 
@@ -100,16 +100,12 @@ Notes:
 - **IFEval rises sharply**: prompt-strict 0.0961→0.1091→**0.1701** (baseline 0.0924); inst-strict 0.2014→0.2026→**0.2794** (baseline 0.1894). 50k-polish dips slightly (0.1664/0.2698) — a 50k subset at low lr does not dislodge 3M's instruction-following advantage.
 - **GSM8K positive but limited**: flexible 0.0265 / 0.0197 / **0.0227** (baseline 0.0167), short of the planned +1~3pp expectation; strict climbs with scale to 0.0205. 50k-polish roughly flat (0.0212).
 - **Harness trade-off widens**: 0.4210 / 0.4158 / 0.4034 / 0.4042 (base 0.4250), concentrated in boolq / arc_easy; 50k-polish nudges boolq up (0.4263→0.4419), +0.08pp on the mean, still outside the 0.3pp guard.
-- **The primary-metric direction is clearly right**: 200k→1M→3M improves across the board. **3M (v3.0-it) is this campaign's best model**: top rubric/IFEval/GSM8K. 50k-polish did not significantly beat 3M. Choosing 3M as the polish init was correct; the polish step itself added nothing.
+- **The primary-metric direction is clearly right**: 200k→1M→3M improves across the board. **3M (v3.0-it) is the best model of the series**: top rubric/IFEval/GSM8K. 50k-polish did not significantly beat 3M. Choosing 3M as the polish init was correct; the polish step itself added nothing.
 
-## 7. Next Steps
+## 7. Closure
 
-1. ~~3M training + eval~~ (done: trained to 9/26 15:05, results pulled 22:34).
-2. ~~50k-polish training~~ (done: 9/26 23:15, 1,099 steps / 24.5m, init=3M final → `checkpoints/sft_polish/step_0001099_final`).
-3. ~~polish evaluation~~ (done: 9/27 07:27 the eval chain finished, auto-pulled, `data/eval/final_table.md` produced 07:28; only the rubric was missing 2,036 rows, see §5.1 note).
-4. ~~Commit tooling~~ (done: commit `966fead`, 44 files — `train_sft.py` numpy-int32 memory patch + `publish_hf.py` tokenizer whitelist + data-build / training / eval scripts).
-5. ~~Fill polish columns into §5 tables + per-gate verdict~~ (done: rubric PASS, IFEval PASS, GSM8K positive, harness guard exceedance logged; verdict = 3M is the champion).
-6. ~~Last open item: DeepSeek top-up → complete the 2,036 polish rubric rows → refresh tables~~ (**done**: 9/27 resume, complete 4,955/4,955 at 11:17, final_table.md refreshed; conclusion unchanged = **ship v3.0-it**, 50k-polish does not beat 3M on any primary metric). **Campaign closed, nothing outstanding.**
+All planned steps were completed. The shipped model is **v3.0-it** (the 3M tier); the 50k-polish
+variant is recorded here for completeness but was not adopted.
 
 ## 8. Lessons Learned
 
@@ -123,7 +119,7 @@ Notes:
 
 ### 8.2 Training-box engineering (RTX PRO 4500 32GB / 60GB RAM)
 
-- **Python int lists are a memory bomb**: the tokenize intermediate of 856k × ~974-token examples ≈ 23–46GB; 1M's first attempt thrashed swap 7/7 at the packing stage. After the numpy int32 patch, peak went 40GB→21GB (committed with `966fead`). Default data pipelines to numpy/arrow, never native int lists.
+- **Python int lists are a memory bomb**: the tokenize intermediate of 856k × ~974-token examples ≈ 23–46GB; 1M's first attempt thrashed swap 7/7 at the packing stage. After the numpy int32 patch, peak went 40GB→21GB. Default data pipelines to numpy/arrow, never native int lists.
 - **glibc arena retention**: 3M ran the whole job at RSS ~42GB, stable and harmless (free was only ~1GB); the correct signal is swap no longer growing. Do not kill jobs based on RSS alone.
 - **Throughput baseline**: seq1024 / bs24 stable (21.6GB VRAM) at ~0.745 steps/s. 200k 4,447 steps = 1.7h; 1M 26,857 steps = 10.0h; 3M 60,159 steps = 22.3h. Schedule accordingly.
 

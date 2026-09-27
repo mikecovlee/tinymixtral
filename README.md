@@ -3,9 +3,11 @@
 A Mixtral-style Mixture-of-Experts causal language model for pretraining research on a single
 consumer GPU. The current flagship is **[v3.0](versions/v3.0/README.md)** — a ~477.5M total /
 ~276.1M active MoE (top-2 of 4 experts) trained on 8.05B tokens, matching the previous 1B MoE
-with ~2.5× fewer parameters.
+with ~2.5× fewer parameters. Its instruction-tuned release is
+**[v3.0-it](versions/v3.0-it/README.md)** — [tinymixtral-it](https://huggingface.co/mikecovlee/tinymixtral-it).
 
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral-blue)](https://huggingface.co/mikecovlee/tinymixtral)
+[![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral--it-green)](https://huggingface.co/mikecovlee/tinymixtral-it)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral--v1.1--1b-yellow)](https://huggingface.co/mikecovlee/tinymixtral-v1.1-1b)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-mikecovlee%2Ftinymixtral--v1.1--0.5b-orange)](https://huggingface.co/mikecovlee/tinymixtral-v1.1-0.5b)
 
@@ -14,6 +16,7 @@ with ~2.5× fewer parameters.
 | Version | Params (total / active) | Experts | Data | Harness mean | Card |
 |---------|-------------------------|---------|------|:---:|---|
 | **v3.0** | 477.5M / 276.1M | 4 routed, top-2 | 8.05B (6-source blend) | **0.4250** | [versions/v3.0](versions/v3.0/README.md) |
+| **v3.0-it** | 477.5M / 276.1M | 4 routed, top-2 | v3.0 + 2.17M SFT | 0.4034² | [versions/v3.0-it](versions/v3.0-it/README.md) |
 | v1.1-1b | 1182M / 352M | 8 routed, top-2 | 4B → 8B (SmolLM blend) | 0.425 | [versions/v1.1-1b](versions/v1.1-1b/README.md) |
 | v2.0 beta | 498M / 241M | 1 shared + 6 routed | 4B (SmolLM blend) | 0.397 | [versions/v2.0-beta](versions/v2.0-beta/README.md) |
 | v1.1 | 432M / 176M | 6 routed, top-2 | 4B (SmolLM blend) | 0.409 | [versions/v1.1](versions/v1.1/README.md) |
@@ -21,6 +24,8 @@ with ~2.5× fewer parameters.
 
 Harness mean = lm-evaluation-harness v0.4.12, 0-shot, 8-task suite. See each card for full
 architecture tables, training recipes, per-task results and negative results.
+² v3.0-it is instruction-tuned: IFEval 0.1701/0.2794 and LLM rubric 15.0±0.3 rise sharply,
+with a documented boolq trade-off — see the [Instruction Tuning](#instruction-tuning) section.
 
 Dataset sources: [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu) (`sample-10BT`),
 [Cosmopedia v2](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia-v2),
@@ -142,7 +147,7 @@ One epoch of SFT from the v3.0 base on 2.17M decontaminated English conversation
 
 The harness drop is a real trade-off concentrated in boolq (0.615 -> 0.426):
 instruction following rose sharply while multiple-choice common-sense regressed.
-Full campaign record, methodology and lessons: `versions/v3.0-it/REPORT.md`;
+Full report, methodology and lessons: `versions/v3.0-it/REPORT.md`;
 reproduction: `versions/v3.0-it/REPRODUCE.md`. (*prior-arm reference)
 
 ## Project Structure

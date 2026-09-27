@@ -13,7 +13,7 @@ a single GPU. Shipped as `mikecovlee/tinymixtral-it` on the HF Hub.
 | Path | Purpose |
 |------|---------|
 | `REPRODUCE.md` | Full runbook: data build → training → evaluation chain |
-| `REPORT.md` | Campaign report: methodology, results, lessons learned |
+| `REPORT.md` | Report: methodology, results, lessons learned |
 | `configs/` | Training configs per scale tier (200k / 1m / 3m / polish) |
 | `data/` | Dataset tooling: `prefetch_sources.py`, `build_dataset.py`, `sample_subset.py` |
 | `train_sft.py` | SFT trainer (packing, label masking, `--seed/--resume/--grad-accum/--keep-last`) |
