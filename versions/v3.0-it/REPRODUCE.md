@@ -11,9 +11,7 @@ command from the repo root.
   transformers 4.57.6, pyarrow, numpy, safetensors 0.8.0, lm_eval 0.4.12.
 - **Evaluation**: the same box is enough (any 24 GB-class GPU; the campaign also
   used an A5000 on a second machine - see the optional note in §3). Needs the same
-  Python env plus `lm_eval`, and a DeepSeek API key in `DEEPSEEK_API_KEY`
-  (optional fallback:
-  `~/.local/share/opencode/auth.json`, `deepseek` entry). Evaluation is plain shell commands (see §3).
+  Python env plus `lm_eval`, and a DeepSeek API key in `DEEPSEEK_API_KEY`. Evaluation is plain shell commands (see §3).
 - **Base model**: v3.0 base, either source works:
   - HF cache snapshot of the public repo `mikecovlee/tinymixtral` at revision
     `6e0792c1781d3c704c9f9a3844662998795b306c` (the tokenizer comes from here too;
