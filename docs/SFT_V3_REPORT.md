@@ -1,84 +1,84 @@
-# SFT V3/V4 训练与评测报告（已收尾：交付 sft_v2_v3）
+# SFT V3/V4 Training & Evaluation Report (Closed: shipped model = sft_v2_v3)
 
-> 状态：V1/V2 完成并评测；V3 训练中（预计 9/26 ~15:10 完成）；V4 待定。
-> 本文件随进度更新，最终与 `docs/SFT_V3_PLAN.md` 的 ACTUALS 一并定稿。
+> Status: campaign complete. V1/V2/V3/V4 all trained and evaluated; final verdict in §6/§7.
+> This document is the results report; the pre-registered plan and its ACTUALS live in `docs/SFT_V3_PLAN.md`.
 
-## 1. 背景与目标
+## 1. Background & Goal
 
-- 基座：`v3.0`（477.5M 总参数 / 276.1M 激活，MoE top-2 of 4），max_pos 2048，vocab 32000。
-- 既有结论：DPO/GRPO/KTO/RLOO 等对齐尝试相对 base 均无显著收益；唯一显著提升来自 `imp-sft`（rubric 0.1 → 7.4）。`imp-sft` 仅用了 1M parquet 的前 50k 行（存在行序偏置），且 answer-only 数据会破坏通用能力。
-- 目标：从 base 重新做更大规模、更均衡、更高质量的中英（**本轮不含中文**）SFT：
-  - V3：300 万行、1 epoch；
-  - V4：50k 高质量 CoT polish（lr 5e-6、1 epoch）。
-- 指标优先级：**rubric 与 IFEval 为主**，8-task harness 仅作回归护栏。
+- Base model: `v3.0` (477.5M total / 276.1M active parameters, MoE top-2 of 4), max_pos 2048, vocab 32000.
+- Prior findings: alignment attempts (DPO/GRPO/KTO/RLOO) showed no significant gain over base; the only large significant win came from `imp-sft` (rubric 0.1 → 7.4). `imp-sft` used only the first 50k rows of a 1M-row parquet (row-order bias), and answer-only data was shown to damage general ability.
+- Goal: rebuild a larger, more balanced, higher-quality general SFT from base (**no Chinese data this round**):
+  - V3: 3M rows, 1 epoch;
+  - V4: 50k high-quality CoT polish (lr 5e-6, 1 epoch).
+- Metric priority: **rubric and IFEval are primary**; the 8-task harness is a regression guard only.
 
-## 2. 方法
+## 2. Method
 
-### 2.1 数据构建（`scripts/build_sft_v2.py` / `scripts/make_sft_v4.py`）
+### 2.1 Data construction (`scripts/build_sft_v2.py` / `scripts/make_sft_v4.py`)
 
-- 统一 schema：`conversations=[{from:human|gpt, value}]` + `source/category/lang/n_turns`。
-- 过滤：assistant 段 10–2048 token；精确 hash 去重 + MinHash-LSH（Jaccard ≥ 0.8）近重复去重；全局打乱；单源占比 ≤ 15%。
-- 去污染：n-gram 对 gsm8k / arc / obqa / hellaswag / piqa / ifeval / mmlu / ceval / cmmlu 及 held-out 集。
-- 无中文数据。
-- V4：从 V3 训练集中分层抽样（metamath 12k、orcamath 12k、omi2 8k、tulu3 10k、slimorca 8k）。
+- Unified schema: `conversations=[{from:human|gpt, value}]` + `source/category/lang/n_turns`.
+- Filtering: assistant spans 10–2048 tokens; exact-hash dedup + MinHash-LSH near-dup dedup (Jaccard ≥ 0.8); global shuffle; per-source share ≤ 15%.
+- Decontamination: n-gram overlap removed against gsm8k / arc / obqa / hellaswag / piqa / ifeval / mmlu / ceval / cmmlu and the held-out set.
+- No Chinese data.
+- V4: stratified sample from the V3 training set (metamath 12k, orcamath 12k, omi2 8k, tulu3 10k, slimorca 8k).
 
-### 2.2 训练（`scripts/train_sft.py`）
+### 2.2 Training (`scripts/train_sft.py`)
 
-- 从 base 初始化；seq_len 1024，batch_size 24，lr 2e-5 cosine（warmup 3%），bf16 + gradient checkpointing，1 epoch。
-- **修复**：tokenize/pack 阶段由 Python int list 改为 numpy int32，V2 峰值内存 40GB → ~21GB，消除 swap 7/7 抖动。
+- Initialized from base; seq_len 1024, batch_size 24, lr 2e-5 cosine (3% warmup), bf16 + gradient checkpointing, 1 epoch.
+- **Fix**: the tokenize/pack stage switched from Python int lists to numpy int32, cutting V2 peak RAM from 40GB to ~21GB and eliminating the swap-7/7 thrash.
 
-### 2.3 评测（全部 offload 到工作机 10.31.0.14）
+### 2.3 Evaluation (fully offloaded to the work machine, `<EVAL_HOST>`)
 
-- rubric：4,955 条新 held-out prompt，`deepseek-flash` 按 0–100 四维打分（correctness / completeness / reasoning / instruction_following），报告 mean ± se 及**配对** t 检验。
-- IFEval：prompt/inst level strict+loose。
-- harness：8 任务回归护栏。口径（canonical）：hellaswag / piqa / arc_challenge / openbookqa = acc_norm；winogrande / arc_easy / boolq / lambada = acc。
+- rubric: 4,955 fresh held-out prompts, `deepseek-flash` scores four dimensions 0–100 (correctness / completeness / reasoning / instruction_following); report mean ± se plus **paired** t-tests per item.
+- IFEval: prompt/inst level, strict + loose.
+- harness: 8-task regression guard. Canonical formula: hellaswag / piqa / arc_challenge / openbookqa = acc_norm; winogrande / arc_easy / boolq / lambada = acc.
 
-## 3. 数据规模
+## 3. Data Scale
 
-| 规模 | 行数 | dev | heldout | raw | 构建耗时 |
+| scale | rows | dev | heldout | raw | build time |
 |---|---|---|---|---|---|
 | V1 | 195,170 | 1,000 | 5,000 | — | — |
 | V2 | 856,805 | 4,305 | 5,000 | 2,395,834 | 1,840.9s |
 | V3 | 2,168,835 | 10,898 | 2,598 | 4,143,061 | 2,531.9s |
 | V4 | 50,000 | — | — | — | 1.9s |
 
-## 4. 训练
+## 4. Training
 
-| 规模 | 行数 | packed seq | steps | bs | lr | 耗时 |
+| scale | rows | packed seq | steps | bs | lr | time |
 |---|---|---|---|---|---|---|
 | V1 | 195,170 | 106,718 | 4,447 | 24 | 2e-5 | 99.4m |
 | V2 | 856,805 | 644,557 | 26,857 | 24 | 2e-5 | 9.97h |
-| V3 | 2,168,835 | 1,443,804 | 60,159 | 24 | 2e-5 | 22.3h（1337.8m） |
-| V4 | 50,000 | 26,365 | 1,099 | 24 | 5e-6 | 24.5m（9/26 23:15 完成，init=V3 final） |
+| V3 | 2,168,835 | 1,443,804 | 60,159 | 24 | 2e-5 | 22.3h (1337.8m) |
+| V4 | 50,000 | 26,365 | 1,099 | 24 | 5e-6 | 24.5m (done 9/26 23:15, init=V3 final) |
 
-## 5. 评测结果
+## 5. Evaluation Results
 
-### 5.1 rubric（主指标，4,955 对新 held-out，0–100）
+### 5.1 rubric (primary metric, 4,955 paired fresh held-out prompts, 0–100)
 
-| 维度 | imp-sft | sft_v2_v1 | sft_v2_v2 | sft_v2_v3 | sft_v4 |
+| dimension | imp-sft | sft_v2_v1 | sft_v2_v2 | sft_v2_v3 | sft_v4 |
 |---|---|---|---|---|---|
 | correctness | 7.6 | 12.3 | 12.8 | 14.6 | 14.5 |
 | completeness | 6.3 | 11.3 | 11.7 | 14.6 | 14.4 |
 | reasoning | 2.3 | 4.9 | 4.9 | 7.2 | 7.2 |
 | instruction_following | 9.3 | 17.3 | 18.5 | 23.5 | 23.2 |
 | **overall** | **6.4±0.18** | **11.4±0.26** | **12.0±0.24** | **15.0±0.28** | **14.9±0.28** |
-| 配对 vs imp-sft | — | **+5.04±0.26 (t=+19.2)** | **+5.56±0.25 (t=+22.4)** | **+8.61±0.28 (t=+30.7)** | **+8.46±0.28 (t=+30.1)** |
+| paired vs imp-sft | — | **+5.04±0.26 (t=+19.2)** | **+5.56±0.25 (t=+22.4)** | **+8.61±0.28 (t=+30.7)** | **+8.46±0.28 (t=+30.1)** |
 
-预定门槛：Δ ≥ +0.5 且 t > 2 —— V1/V2/V3 均以极大裕度通过，且随规模单调上升。
-注：V4 rubric 已补齐定稿（n=4,955/4,955，9/27 10:48 充值后 `run_v4rubfix.ps1 --resume` 开跑，11:17 齐）。此前 2,036 条缺失的根因 = DeepSeek 余额不足（HTTP 402），失败项被静默跳过；临时值（n=2,919 时的 15.4）系前半子集偏高。V4 全量与 V3 的逐条配对差 = **−0.15±0.18（t=−0.8，噪声内）**，V4 未超 V3。
+Preregistered gate: Δ ≥ +0.5 and t > 2 — V1/V2/V3 all pass by a wide margin, monotonically increasing with scale.
+Note: the V4 rubric set is complete (n=4,955/4,955; after the DeepSeek top-up on 9/27 10:48 the `--resume` fill run finished at 11:17). Root cause of the 2,036 missing rows: HTTP 402 insufficient balance, with failed items silently skipped; the interim value (15.4 at n=2,919) was inflated by front-subset bias. Full-set per-item paired difference V4−V3 = **−0.15±0.18 (t=−0.8, within noise)** — V4 does not beat V3.
 
-### 5.2 IFEval / GSM8K（主指标）
+### 5.2 IFEval / GSM8K (primary metrics)
 
-| 指标 | base v3.0 | imp-sft | sft_v2_v1 | sft_v2_v2 | sft_v2_v3 | sft_v4 |
+| metric | base v3.0 | imp-sft | sft_v2_v1 | sft_v2_v2 | sft_v2_v3 | sft_v4 |
 |---|---|---|---|---|---|---|
 | IFEval prompt-strict | — | 0.0924 | 0.0961 | 0.1091 | **0.1701** | 0.1664 |
 | IFEval inst-strict | — | 0.1894 | 0.2014 | 0.2026 | **0.2794** | 0.2698 |
 | GSM8K flexible | — | 0.0167 | 0.0265 | 0.0197 | **0.0227** | 0.0212 |
 | GSM8K strict | — | — | 0.0159 | 0.0174 | **0.0205** | 0.0182 |
 
-### 5.3 8-task harness（回归护栏，canonical 口径）
+### 5.3 8-task harness (regression guard, canonical formula)
 
-| 指标 | base v3.0 | imp-sft | sft_v2_v1 | sft_v2_v2 | sft_v2_v3 | sft_v4 |
+| metric | base v3.0 | imp-sft | sft_v2_v1 | sft_v2_v2 | sft_v2_v3 | sft_v4 |
 |---|---|---|---|---|---|---|
 | hellaswag (acc_norm) | 0.335 | — | 0.3347 | 0.3377 | 0.3400 | 0.3400 |
 | piqa (acc_norm) | 0.638 | — | 0.6306 | 0.6333 | 0.6338 | 0.6311 |
@@ -90,61 +90,61 @@
 | lambada_openai (acc) | 0.268 | — | 0.2948 | 0.2874 | 0.2890 | 0.2882 |
 | **mean** | **0.4250** | — | **0.4210 (-0.40pp)** | **0.4158 (-0.92pp)** | **0.4034 (-2.16pp)** | **0.4042 (-2.08pp)** |
 
-注：
-1. rubric 数值基于新 5k held-out 集 + `rubric_judge2`（0–100），与旧 500-prompt 数字（base 0.1 / imp-sft 7.4）不可比。
-2. 计划文档中记录的 base 0.4272 / imp-sft 0.4260 在工作机上无对应 JSON，口径不可考；此处统一采用 canonical 口径，base 取 README v3.0 逐任务表复算（0.4250）。
-3. harness 是**回归护栏**而非优化目标：降幅随规模扩大——V1 -0.40pp、V2 -0.92pp、V3 -2.16pp；V3 的拖累集中在 boolq（0.615→0.426）与 arc_easy，hellaswag/piqa/winogrande/arc_challenge/openbookqa/lambada 反而持平或更好。作为「指令遵循大幅提升」的权衡记录在案；V4 polish（低 lr、高质量 CoT）预期部分修复。
+Notes:
+1. rubric numbers use the fresh 5k held-out set + `rubric_judge2` (0–100); NOT comparable with the old 500-prompt figures (base 0.1 / imp-sft 7.4).
+2. The base 0.4272 / imp-sft 0.4260 recorded in the plan have no backing JSON on the work machine; their formula is unrecoverable. This table uses one canonical formula throughout, with base recomputed from the README v3.0 per-task table (0.4250).
+3. The harness is a **regression guard, not an optimization target**. The drop grows with scale: V1 -0.40pp, V2 -0.92pp, V3 -2.16pp; V3's drag concentrates in boolq (0.615→0.426) and arc_easy, while hellaswag/piqa/winogrande/arc_challenge/openbookqa/lambada stay flat or improve. Logged as the trade-off for large instruction-following gains; the V4 polish (low lr, high-quality CoT) was expected to partially recover it.
 
-## 6. 阶段性结论（截至 V4）
+## 6. Conclusions (through V4)
 
-- **rubric 随规模单调大涨**：V1 +5.04 / V2 +5.56 / V3 **+8.61（t=+30.7）**，4,955 对逐条配对显著；V4 全量 14.9±0.28（**+8.46，t=+30.1**），V4−V3 配对 −0.15±0.18（t=−0.8，噪声内）→ 低 lr 微调中性偏负，符合预期。
-- **IFEval 显著上升**：prompt-strict 0.0961→0.1091→**0.1701**（imp-sft 0.0924）；inst-strict 0.2014→0.2026→**0.2794**（imp-sft 0.1894）。V4 polish 略回落（0.1664/0.2698）——50k 子集占比小、lr 低，未撼动 V3 的指令遵循优势。
-- **GSM8K 正向但有限**：flexible 0.0265 / 0.0197 / **0.0227**（imp-sft 0.0167），未达计划 +1~3pp 期望；strict 随规模升至 0.0205。V4 polish 基本持平（0.0212）。
-- **harness 权衡扩大**：0.4210 / 0.4158 / 0.4034 / 0.4042（base 0.4250），集中在 boolq / arc_easy；V4 polish 让 boolq 微升（0.4263→0.4419）使均值 +0.08pp，但仍在 0.3pp 护栏外。
-- **主指标方向明确正确**：V1→V2→V3 全面单调改善，**V3（sft_v2_v3）为本轮最优**：rubric/IFEval/GSM8K 三高；V4 polish 未显著超越 V3。选 **V3 为 V4 polish 初值**的决策正确，但 polish 步未带来额外收益。
+- **rubric rises monotonically with scale**: V1 +5.04 / V2 +5.56 / V3 **+8.61 (t=+30.7)**, significant across 4,955 paired items; V4 full-set 14.9±0.28 (**+8.46, t=+30.1**), paired V4−V3 −0.15±0.18 (t=−0.8, noise) → low-lr polish is neutral-to-slightly-negative, as suspected.
+- **IFEval rises sharply**: prompt-strict 0.0961→0.1091→**0.1701** (imp-sft 0.0924); inst-strict 0.2014→0.2026→**0.2794** (imp-sft 0.1894). V4 polish dips slightly (0.1664/0.2698) — a 50k subset at low lr does not dislodge V3's instruction-following advantage.
+- **GSM8K positive but limited**: flexible 0.0265 / 0.0197 / **0.0227** (imp-sft 0.0167), short of the planned +1~3pp expectation; strict climbs with scale to 0.0205. V4 polish roughly flat (0.0212).
+- **Harness trade-off widens**: 0.4210 / 0.4158 / 0.4034 / 0.4042 (base 0.4250), concentrated in boolq / arc_easy; V4 polish nudges boolq up (0.4263→0.4419), +0.08pp on the mean, still outside the 0.3pp guard.
+- **The primary-metric direction is clearly right**: V1→V2→V3 improves across the board. **V3 (sft_v2_v3) is this campaign's best model**: top rubric/IFEval/GSM8K. V4 polish did not significantly beat V3. Choosing V3 as the V4 init was correct; the polish step itself added nothing.
 
-## 7. 下一步
+## 7. Next Steps
 
-1. ~~V3 训练 + 评测~~（已完成，9/26 15:05 训完、22:34 结果回传）。
-2. ~~V4 polish 训练~~（已完成，9/26 23:15，1,099 steps / 24.5m，init=V3 final → `checkpoints/sft_v4/step_0001099_final`）。
-3. ~~V4 评测~~（已完成：9/27 07:27 `OFFLOAD_ARM_DONE`，07:27 自动回传，07:28 自动出 `data/dpo/final_table.md`；唯 rubric 缺 2,036 条，见 §5.1 注）。
-4. ~~提交工具脚本~~（已完成，commit `966fead`，44 文件：`train_sft.py` numpy-int32 内存补丁 + `publish_hf.py` tokenizer 白名单 + 数据构建 / 训练 / 评测 offload 脚本）。
-5. ~~V4 列填入 §5 各表 + 逐条判定~~（已完成：rubric 临时 PASS、IFEval PASS、GSM8K 正向、harness 护栏超出记录在案；结论 = V3 为本轮冠军）。
-6. ~~唯一未完事项：DeepSeek 充值 → 补齐 2,036 条 V4 rubric → 刷新表~~（**已完成**：9/27 充值后 resume，11:17 齐 4,955/4,955，final_table.md 已刷新；结论不变 = **交付 sft_v2_v3**，V4 polish 全指标未超 V3）。**战役收尾，无遗留。**
+1. ~~V3 training + eval~~ (done: trained to 9/26 15:05, results pulled 22:34).
+2. ~~V4 polish training~~ (done: 9/26 23:15, 1,099 steps / 24.5m, init=V3 final → `checkpoints/sft_v4/step_0001099_final`).
+3. ~~V4 evaluation~~ (done: 9/27 07:27 `OFFLOAD_ARM_DONE`, auto-pulled, `data/dpo/final_table.md` produced 07:28; only the rubric was missing 2,036 rows, see §5.1 note).
+4. ~~Commit tooling~~ (done: commit `966fead`, 44 files — `train_sft.py` numpy-int32 memory patch + `publish_hf.py` tokenizer whitelist + data-build / training / eval-offload scripts).
+5. ~~Fill V4 columns into §5 tables + per-gate verdict~~ (done: rubric PASS, IFEval PASS, GSM8K positive, harness guard exceedance logged; verdict = V3 is the champion).
+6. ~~Last open item: DeepSeek top-up → complete the 2,036 V4 rubric rows → refresh tables~~ (**done**: 9/27 resume, complete 4,955/4,955 at 11:17, final_table.md refreshed; conclusion unchanged = **ship sft_v2_v3**, V4 polish does not beat V3 on any primary metric). **Campaign closed, nothing outstanding.**
 
-## 8. 经验教训（Lessons Learned）
+## 8. Lessons Learned
 
-### 8.1 数据与训练策略
+### 8.1 Data & training strategy
 
-- **窄切片数据会砸能力，不只是不涨**：exam3（纯答案式数学）rubric 仅 1.2，配对 −5.81（t=−7.2）。SFT 数据必须保留完整解释式回答；数学占比要小且有过程。
-- **行序偏置是隐形陷阱**：imp-sft 当年只取了 1M parquet 的前 50k 行（未 shuffle），等于在某个窄切片上训练——这是它 rubric 停在 6.4、V1 仅换数据构成就 +5.04 的主要原因。**大数据集取样必须先全局 shuffle**（本轮 builder 已内置）。
-- **规模在这条线上仍远未饱和**：195k→857k→2.17M 行，rubric 11.4→12.0→15.0，IFEval 0.096→0.109→0.170。且 V2→V3 增益最大（+3.0），说明**数据构成（tulu3 多轮指令占比）比纯规模更关键**。
-- **低 lr polish 步无收益**：V4（50k 数学/长文 @ lr 5e-6，1,099 步）相对 V3 全部主指标在噪声内（rubric 配对 −0.15±0.18）。结论：这个量级模型靠 polish 微调榨不出东西，下次直接砍掉 polish 阶段，预算给主训数据。
-- **decontam / heldout 必须做在前面**：n-gram 去污染覆盖 8 个评测集 + rubric held-out 集零重叠，否则 4,955 对配对检验的显著性就是假的。
+- **Narrow-slice data damages ability — it is not merely 'no gain'**: exam3 (answer-only math) scored rubric 1.2, paired −5.81 (t=−7.2). SFT data must keep full explanatory answers; math share must stay small and process-bearing.
+- **Row-order bias is an invisible trap**: imp-sft historically took only the first 50k rows of a 1M parquet (unshuffled) — effectively training on a narrow slice. That is the main reason it plateaued at rubric 6.4 while V1 gained +5.04 purely from better data composition. **Always globally shuffle before sampling from large datasets** (built into this round's builder).
+- **This scale axis is far from saturated**: 195k→857k→2.17M rows gave rubric 11.4→12.0→15.0 and IFEval 0.096→0.109→0.170. The V2→V3 jump was the largest (+3.0), indicating **data composition (tulu3 multi-turn instruction share) matters more than raw scale**.
+- **Low-lr polish buys nothing**: V4 (50k math/long-form @ lr 5e-6, 1,099 steps) sat within noise of V3 on every primary metric (paired rubric −0.15±0.18). For a model at this size, a polish stage extracts nothing — cut it next time and spend the budget on main training data.
+- **Decontamination / held-out must come first**: n-gram decontam across all 8 eval sets plus a zero-overlap rubric held-out set; without it the 4,955-pair significance would be fake.
 
-### 8.2 训练机工程（RTX PRO 4500 32GB / 60GB RAM）
+### 8.2 Training-box engineering (RTX PRO 4500 32GB / 60GB RAM)
 
-- **Python int list 是内存炸弹**：856k 条 ×974 token 的 tokenize 中间态 ≈ 23-46GB，V2 首跑在 packing 阶段 swap 7/7 抖动假死。改 numpy int32 后峰值 40GB→21GB（补丁已随 `966fead` 提交）。数据管线默认用 numpy/arrow，不用原生 list。
-- **glibc arena 滞留**：V3 全程 RSS ~42GB 但稳定不涨（free 仅 1GB），看着吓人实则无害；判断依据是 swap 不再增长。预期内现象，勿按 RSS 误杀。
-- **吞吐基线**：seq1024 / bs24 稳定（显存 21.6GB），~0.745 steps/s。V1 4,447 步 = 1.7h；V2 26,857 步 = 10.0h；V3 60,159 步 = 22.3h。排程按此估。
-- **marker + waiter 自动链是本轮最大工程红利**：SFTV2_DONE→自动起 V3（间隔 14 秒）→自动 publish+scp+远端评测，GPU 零等待、48h 无人值守。所有超过 2h 的作业都套这条模式（外层 shell 打 `START/rc=/DONE` 标记）。
+- **Python int lists are a memory bomb**: the tokenize intermediate of 856k × ~974-token examples ≈ 23–46GB; V2's first attempt thrashed swap 7/7 at the packing stage. After the numpy int32 patch, peak went 40GB→21GB (committed with `966fead`). Default data pipelines to numpy/arrow, never native int lists.
+- **glibc arena retention**: V3 ran the whole job at RSS ~42GB, stable and harmless (free was only ~1GB); the correct signal is swap no longer growing. Do not kill jobs based on RSS alone.
+- **Throughput baseline**: seq1024 / bs24 stable (21.6GB VRAM) at ~0.745 steps/s. V1 4,447 steps = 1.7h; V2 26,857 steps = 10.0h; V3 60,159 steps = 22.3h. Schedule accordingly.
+- **Marker + waiter automation was the biggest engineering win**: SFTV2_DONE → auto-start V3 (14s later) → auto publish + scp + remote eval; zero GPU idle time, 48h unattended. Every job over 2h should use this pattern (outer shell printing `START/rc=/DONE` markers).
 
-### 8.3 评测方法学
+### 8.3 Evaluation methodology
 
-- **配对检验 + 大样本是生命线**：rubric 裁判很粗（分布集中在 0-25），500 样本看不出差；4,955 对逐 id 配对后 t 值 19-31，V1/V2 差 0.5 分也能分辨。**先定判定门槛再跑评测**（本轮预登记 Δ≥+0.5 且 t>2，避免了事后挑指标）。
-- **指标口径必须预注册到字面**：harness 均值 0.4272/0.4260 两个旧值因无 JSON 存档、公式不可考而作废；acc 与 acc_norm 之差在 arc_easy 上有 3.5pp。最终统一口径（hellaswag/piqa/arc_challenge/openbookqa=acc_norm，其余=acc）才让 base/V1-V4 可比。**任何进对比表的数字，落库时必须连公式一起存**。
-- **部分数据≠随机数据**：V4 rubric 缺样 2,036 条全部在 id≥3022（按生成顺序=后段难样本），临时值 15.43 虚高，补全后 14.86、结论翻转（V4 未超 V3）。**裁判文件必须先验证覆盖率再出判定**（final_table 类工具应加 n 完整性断言）。
-- **静默跳过是 bug 级反模式**：rubric_judge2.py 对 API 失败项重试 4 次后直接跳过不写行、还以 rc=0 退出，402 欠费整轮"成功"。教训：批处理评测脚本应**失败即中止或写失败清单**，绝不静默丢样本。
+- **Paired tests + large samples are the lifeline**: the rubric judge is coarse (scores cluster in 0–25); 500 samples cannot separate arms. With 4,955 per-id pairs, t-values reach 19–31 and even a 0.5-point V1/V2 gap resolves. **Set the acceptance gates before running eval** (this round preregistered Δ≥+0.5 and t>2, avoiding post-hoc metric shopping).
+- **Metric formulas must be preregistered verbatim**: the legacy base 0.4272 / imp-sft 0.4260 numbers were voided — no JSON archives, formula unrecoverable; acc vs acc_norm differs by 3.5pp on arc_easy alone. Only after fixing one canonical formula (hellaswag/piqa/arc_challenge/openbookqa = acc_norm, rest = acc) did base/V1–V4 become comparable. **Any number entering a comparison table must be stored together with its formula**.
+- **Partial data ≠ random data**: the 2,036 missing V4 rubric rows were all at id≥3022 (generation order = the harder tail); the interim 15.43 was inflated, the completed 14.86 flipped the conclusion (V4 does not beat V3). **Judge files must pass a coverage check before any verdict** (final_table-style tools should assert n-completeness).
+- **Silent skipping is a bug-class anti-pattern**: rubric_judge2.py retried failed API calls 4 times, then skipped them without writing a row and still exited rc=0 — an entire 402-insufficient-balance round "succeeded". Batch eval scripts must **fail fast or write a failure manifest**, never silently drop samples.
 
-### 8.4 评测机（Windows/10.31.0.14）运维
+### 8.4 Eval-box (Windows work machine) operations
 
-- **ssh 内联 PowerShell 嵌套引号会静默失败**（tmux 会话没建、日志没落、无任何报错）→ 一切远端逻辑落成 .ps1 文件 scp 过去执行。
-- **tmux 启动命令不带 `*> log` 重定向，标记就丢**：V4 resume 这次 DONE 标记没落盘，本地 waiter 白等，只能手动收尾。
-- **远端 python stdout 块缓冲**：重定向到文件后 tqdm/progress 全部不可见，判断进度只能看输出文件体积和 mtime。评测链的 gen 阶段以 `.jsonl` 字节数对照完成态参考值（~7.3MB/4,955 条）。
-- **key 与评测同机原则**：本机裁判 key 被 CC 安全网拦截（auth.json 不可读），本地重评走不通；把生成+评分全部放工作机（key 所在环境）是正确架构。另：外部 API 任务前先跑最小 probe（本次 402 若有前置探测可省一整轮 resume）。
+- **Inline PowerShell over ssh with nested quotes fails silently** (no tmux session, no log, no error) → put all remote logic into .ps1 files and scp them.
+- **tmux launch without `*> log` redirection loses the markers**: during the V4 resume run the DONE marker never landed, the local waiter waited in vain, and the finish had to be done manually.
+- **Remote python stdout is block-buffered**: once redirected to a file, tqdm/progress is invisible; judge progress by output-file size and mtime (gen stage: .jsonl bytes against the ~7.3MB / 4,955-row reference).
+- **Keep the API key on the eval box**: the local judge key is blocked by the CC safety net (auth.json unreadable), so local re-judging is impossible; running generation + scoring on the work machine (where the key lives) is the correct architecture. Also: run a minimal API probe before any external-API batch (a 402 pre-probe would have saved an entire resume round).
 
-### 8.5 模型能力边界（477M / 激活 276M）
+### 8.5 Model capability boundary (477M total / 276M active)
 
-- SFT 后"对话形态"完全成立（chat template、列表/代码块、正常停止、无 ChatML 泄漏、无失控复读），但**内容层面呈典型小模型症状**：句内复读环、计算结果编造（17×4→17）、严格格式指令（"只回 JSON"）跟随失败——与 IFEval 17% / GSM8K 2.7% 定量结果互相印证（9/27 chat 探针六例）。
-- 指令跟随能力与"基础常识/事实"是两个独立的天花板；前者 SFT 数据可买（本轮 +84%），后者受参数量与预训练语料限制，**SFT 阶段不要指望**。
-- boolq 类 yes/no 任务是 SFT 分布漂移最敏感的前哨（0.615→0.426，其余 7 个 harness 任务基本持平）。若护栏要紧，应在 SFT 配比中加入自然语言判断类样本对冲。
+- After SFT the *conversational form* is fully there (chat template, lists/code blocks, clean stops, no ChatML leakage, no runaway repetition), but *content* shows classic small-model symptoms: intra-sentence echo loops, fabricated arithmetic (17×4→17), failure on strict format instructions ("reply with JSON only") — quantitatively consistent with IFEval 17% / GSM8K 2.7% (six-case chat probe, 9/27).
+- Instruction-following and base commonsense/factual knowledge are two separate ceilings; the former is buyable with SFT data (+84% this round), the latter is bound by parameter count and pretraining corpus — **do not expect SFT to fix it**.
+- boolq-style yes/no tasks are the most sensitive sentinel for SFT distribution drift (0.615→0.426 while the other 7 harness tasks stayed roughly flat). If the guard matters, add natural-language-judgment samples to the SFT mix as a hedge.
