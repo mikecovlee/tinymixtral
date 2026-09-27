@@ -78,12 +78,15 @@ Same 7-task suite, measured locally (lm-evaluation-harness v0.4.12, 0-shot, cuda
 | OpenBookQA | acc_norm | 0.302 | 0.372 | 0.316 |
 | LAMBADA | acc | 0.289 | 0.532 | 0.401 |
 | **Mean** | — | 0.4002 | 0.5516 | 0.4821 |
-| MMLU | acc (5-shot) | 0.243 | — | — |
+| MMLU | acc (5-shot) | 0.243 | 0.358* | 0.528† |
 | TruthfulQA | MC2 (0-shot) | 0.412 | — | — |
 
 SmolLM2-360M (4T tokens) and Qwen3-0.6B (36T tokens) are far above v3.0-it's 8.05B-token
-budget (~500× / ~4500×) — the gap is primarily a data-budget difference. MMLU/TruthfulQA
-were not re-run on the external models (—).
+budget (~500× / ~4500×) — the gap is primarily a data-budget difference. External MMLU
+cells come from published reports: `*` SmolLM2-360M, MMLU (cloze, 0-shot, lighteval) —
+[official model card](https://huggingface.co/HuggingFaceTB/SmolLM2-360M); `†` Qwen3-0.6B
+(base), MMLU (5-shot) — [Qwen3 Technical Report](https://arxiv.org/abs/2505.09388).
+Neither model publishes an official TruthfulQA MC2 score, so those cells stay blank.
 
 ## Quick start
 

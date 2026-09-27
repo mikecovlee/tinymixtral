@@ -108,6 +108,10 @@ Notes:
    capacity/data-budget-limited at 477M/8.05B tokens. TruthfulQA MC2 is flat
    (~0.407–0.417), with the base slightly *higher* than the SFT arms; MC1 moves only
    +0.2pp at 3M/polish. SFT does not materially move either metric.
+3. External references (not measured by us): SmolLM2-360M reports MMLU (cloze, 0-shot,
+   lighteval) 35.8 on its official model card; Qwen3-0.6B (base) reports MMLU (5-shot)
+   52.81 in the Qwen3 Technical Report (arXiv:2505.09388) — same protocol as ours.
+   Neither publishes an official TruthfulQA MC2 score.
 
 ## 6. Conclusions (through polish)
 
