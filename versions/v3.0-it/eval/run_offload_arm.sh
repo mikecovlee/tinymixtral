@@ -3,14 +3,14 @@
 # Linux eval-machine counterpart of run_offload_arm.ps1:
 # gen -> rubric -> harness -> ifeval -> gsm8k for one published arm.
 # Env: EVAL_PY (default python), PROMPTS_FILE (default
-#      eval_prompts/heldout_prompts_id_1k5.parquet), PROXY_URL (optional).
+#      versions/v3.0-it/eval_prompts/heldout_prompts_id_1k5.parquet), PROXY_URL (optional).
 set -u
 ARM=$1
 TAG=$2
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO_ROOT"
 PY="${EVAL_PY:-python}"
-PROMPTS="${PROMPTS_FILE:-eval_prompts/heldout_prompts_id_1k5.parquet}"
+PROMPTS="${PROMPTS_FILE:-versions/v3.0-it/eval_prompts/heldout_prompts_id_1k5.parquet}"
 if [ -n "${PROXY_URL:-}" ]; then export HTTP_PROXY="$PROXY_URL" HTTPS_PROXY="$PROXY_URL"; fi
 mkdir -p logs data/dpo
 LOG="logs/offload_$TAG.log"
@@ -20,12 +20,12 @@ mdir="publish/$ARM"
 [ -d "$mdir" ] || { log "FATAL missing $mdir"; exit 1; }
 
 log "GEN3 $ARM START"
-"$PY" tools/eval/dpo_eval_judge.py gen --model "$mdir" --prompts "$PROMPTS" \
+"$PY" versions/v3.0-it/eval/dpo_eval_judge.py gen --model "$mdir" --prompts "$PROMPTS" \
   --out "data/dpo/evalv3b_$TAG.jsonl" --batch-size 8 --max-new-tokens 448 >>"$LOG" 2>&1
 log "GEN3 $ARM rc=$?"
 
 log "RUBRIC3 $ARM START"
-"$PY" tools/judge/rubric_judge2.py --responses "data/dpo/evalv3b_$TAG.jsonl" \
+"$PY" versions/v3.0-it/judge/rubric_judge2.py --responses "data/dpo/evalv3b_$TAG.jsonl" \
   --out "data/dpo/rubric2v2_$TAG.jsonl" --limit 5000 --concurrency 8 >>"$LOG" 2>&1
 log "RUBRIC3 $ARM rc=$?"
 

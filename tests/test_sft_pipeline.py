@@ -1,5 +1,6 @@
 """Offline unit tests for the SFT data/training/publish pipeline."""
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -10,20 +11,32 @@ import torch
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
-from scripts.build_sft_v2 import (
-    _NUM_PERM,
-    _norm,
-    accept,
-    build_eval_grams,
-    egrams,
-    first_user_hash,
-    np_jaccard,
-    shingle_arr,
-    signature,
-)
-from scripts.train_sft import format_conversation, pack_sequences, tokenize_with_mask
-
 REPO = Path(__file__).resolve().parents[1]
+
+
+def _load(name, relpath):
+    spec = importlib.util.spec_from_file_location(name, REPO / relpath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_build = _load("v30it_build_dataset", "versions/v3.0-it/data/build_dataset.py")
+_train = _load("v30it_train_sft", "versions/v3.0-it/train_sft.py")
+
+_NUM_PERM = _build._NUM_PERM
+_norm = _build._norm
+accept = _build.accept
+build_eval_grams = _build.build_eval_grams
+egrams = _build.egrams
+first_user_hash = _build.first_user_hash
+np_jaccard = _build.np_jaccard
+shingle_arr = _build.shingle_arr
+signature = _build.signature
+format_conversation = _train.format_conversation
+pack_sequences = _train.pack_sequences
+tokenize_with_mask = _train.tokenize_with_mask
 
 
 # ---------------------------------------------------------------- format/mask
@@ -98,7 +111,7 @@ def test_pack_sequences_shift_pad_truncate():
     assert list(packed_ids[0]) == [1, 2, 3, 4]
 
 
-# ---------------------------------------------------------------- build_sft_v2 helpers
+# ---------------------------------------------------------------- build_dataset helpers
 def test_norm_and_hashes():
     assert _norm("  A\tB \n c ") == "a b c"
     conv = [

@@ -163,7 +163,7 @@ def accept(conv):
     return True
 
 
-_SRC_DIR = Path("data/sft_v2_src")
+_SRC_DIR = Path("data/sft_src")
 
 
 def _local(name, patterns, kind):
@@ -180,7 +180,7 @@ def _local(name, patterns, kind):
 
 
 def load_source2(name, cap, rng):
-    """Local-first source loader (pre-downloaded files under data/sft_v2_src/<name>)."""
+    """Local-first source loader (pre-downloaded files under data/sft_src/<name>)."""
     if name == "tulu3":
         ds = _local(name, ["*.parquet"], "parquet") or load_dataset(
             "allenai/tulu-3-sft-mixture", split="train", streaming=True)

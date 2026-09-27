@@ -1,8 +1,8 @@
 """Aggregate rubric judge outputs: per-arm means +- se, and PAIRED per-item
 deltas vs a reference arm (default sft) on shared ids.
 
-Usage: python dpo_scripts/rubric_stats.py data/dpo/rubric2_*.jsonl
-       python dpo_scripts/rubric_stats.py --ref data/dpo/rubric2_sft.jsonl data/dpo/rubric2_*.jsonl
+Usage: python versions/v3.0-it/judge/rubric_stats.py data/dpo/rubric2_*.jsonl
+       python versions/v3.0-it/judge/rubric_stats.py --ref data/dpo/rubric2_sft.jsonl data/dpo/rubric2_*.jsonl
 """
 import argparse
 import glob

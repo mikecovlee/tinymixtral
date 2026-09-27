@@ -1,7 +1,7 @@
 """Pre-download SFT-v2 source files to local disk.
 
 Local-file loading is ~100x faster than HTTP streaming through the proxy.
-Files land in data/sft_v2_src/<name>/ preserving the repo sub-path.
+Files land in data/sft_src/<name>/ preserving the repo sub-path.
 """
 import argparse
 import fnmatch
@@ -26,7 +26,7 @@ SPECS = {
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="data/sft_v2_src")
+    ap.add_argument("--out", default="data/sft_src")
     ap.add_argument("--sources", default="")
     args = ap.parse_args()
     only = {s.strip() for s in args.sources.split(",") if s.strip()}

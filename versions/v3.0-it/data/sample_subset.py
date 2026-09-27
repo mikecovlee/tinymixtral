@@ -12,8 +12,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-DEFAULT_SRC = "data/sft_v2_v3/train.parquet"
-DEFAULT_OUT = "data/sft_v4"
+DEFAULT_SRC = "data/sft_3m/train.parquet"
+DEFAULT_OUT = "data/sft_polish"
 QUOTA = {"metamath": 12000, "orcamath": 12000, "omi2": 8000, "tulu3": 10000, "slimorca": 8000}
 SEED = 42
 

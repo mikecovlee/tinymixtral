@@ -42,4 +42,4 @@ scp -q -r "publish/$ARM" "$EVAL_USER@$EVAL_HOST:'$EVAL_REPO/publish/'"
 echo "scp done"
 echo
 echo "now run on the eval machine:"
-echo "  ${TMUX_EXE:-C:\\Software\\Shell\\bin\\tmux.exe} new-session -d -s $TAG \"powershell -NoProfile -ExecutionPolicy Bypass -File $EVAL_REPO\\scripts\\run_offload_arm.ps1 -Arm $ARM -Tag $TAG\""
+echo "  ${TMUX_EXE:-C:\\Software\\Shell\\bin\\tmux.exe} new-session -d -s $TAG \"powershell -NoProfile -ExecutionPolicy Bypass -File $EVAL_REPO\\versions\\v3.0-it\\eval\\run_offload_arm.ps1 -Arm $ARM -Tag $TAG\""

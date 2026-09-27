@@ -19,7 +19,7 @@ declared licenses on third-party repos can change or be missing.
 
 ## 2. Instruction-tuning (SFT) sources
 
-The SFT blend (`scripts/build_sft_v2.py`) mixes these ten public conversation sets:
+The SFT blend (`scripts/data/build_dataset.py`) mixes these ten public conversation sets:
 
 | Key | Repository | Declared license | Notes |
 |---|---|---|---|
@@ -55,8 +55,8 @@ The SFT blend (`scripts/build_sft_v2.py`) mixes these ten public conversation se
 ## 4. Provenance in this repo
 
 - Pretraining blend definitions: `REPRODUCE.md` §2 and `scripts/` downloaders.
-- SFT source list and fetch patterns: `scripts/prefetch_sft_v2.py` (single `SOURCES` dict).
-- Build/blend/dedup/decontam: `scripts/build_sft_v2.py` (`docs/SFT_V3_REPRODUCE.md` §1).
+- SFT source list and fetch patterns: `scripts/data/prefetch_sources.py` (single `SOURCES` dict).
+- Build/blend/dedup/decontam: `scripts/data/build_dataset.py` (`docs/SFT_V3_REPRODUCE.md` §1).
 - Held-out evaluation prompts (regenerated, not downloaded): `eval_prompts/README.md`.
 
 *Fetched live from Hugging Face dataset-card metadata on 2026-09-27; entries marked

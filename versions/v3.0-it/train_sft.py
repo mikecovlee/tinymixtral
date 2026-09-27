@@ -8,7 +8,7 @@ template (<|user|> / <|assistant|>), masks loss on non-assistant tokens,
 and fine-tunes with AdamW + cosine LR schedule.
 
 Usage:
-    python scripts/train_sft.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final
+    python versions/v3.0-it/train_sft.py --checkpoint checkpoints/knowledge_posttrain/step_0040691_final
 """
 
 import argparse
@@ -23,7 +23,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from model.modeling import TinyMixtralForCausalLM  # noqa: E402
 from scripts.train_utils import (
     make_adamw,

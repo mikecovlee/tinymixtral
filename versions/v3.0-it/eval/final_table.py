@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Consolidate V1/V2/V3 eval artifacts (data/dpo) into one markdown comparison table.
 
-Usage: python dpo_scripts/final_table.py [--dir data/dpo] [--ref sft] [--arms sft sftv2v1 ...]
+Usage: python versions/v3.0-it/eval/final_table.py [--dir data/dpo] [--ref sft] [--arms sft sftv2v1 ...]
 """
 import argparse
 import glob
