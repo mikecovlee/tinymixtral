@@ -54,12 +54,19 @@ Best per row in **bold**; `v1.1-1b` is the 1B MoE at 4B and 8B tokens.
 | OpenBookQA | acc_norm | 0.296 | 0.302 | 0.306 | 0.288 | 0.288 | 0.290 | **0.308** |
 | LAMBADA | acc | 0.268 | **0.289** | 0.234 | 0.200 | 0.227 | 0.224 | 0.240 |
 | **Mean** | — | 0.3979 | **0.4002** | 0.3971 | 0.3807 | 0.3809 | 0.3890 | 0.3783 |
+| MMLU | acc (5-shot) | 0.234 | **0.243** | — | — | — | — | — |
+| TruthfulQA | MC2 (0-shot) | **0.417** | 0.412 | — | — | — | — | — |
 
 ¹ v1.0 is the legacy C4 baseline (earlier evaluation setup); shown for reference.
 BoolQ was dropped from the suite: it swung abnormally across our own runs (−15pp on the v2.0
 architecture change, −19pp after 3M-row SFT) while the other seven tasks stayed stable, so it
 is a poor sentinel. v3.0 reaches the 1B MoE's accuracy with **~2.5× fewer total** and
 **~1.28× fewer active** parameters.
+
+MMLU (5-shot) and TruthfulQA (MC2, 0-shot) are supplementary metrics, not part of the 7-task
+mean; the historical columns were not re-run. All arms sit near the 25% four-choice chance line
+on MMLU — knowledge is capacity/data-budget-limited at this scale, and SFT does not move
+MMLU/TruthfulQA measurably.
 
 ### Comparison with similar models
 
@@ -75,11 +82,14 @@ Same suite and settings, measured locally (lm-evaluation-harness v0.4.12, 0-shot
 | OpenBookQA | acc_norm | 0.296 | 0.302 | 0.372 | 0.316 |
 | LAMBADA | acc | 0.268 | 0.289 | 0.532 | 0.401 |
 | **Mean** | — | 0.3979 | **0.4002** | 0.5516 | 0.4821 |
+| MMLU | acc (5-shot) | 0.234 | 0.243 | — | — |
+| TruthfulQA | MC2 (0-shot) | 0.417 | 0.412 | — | — |
 
 SmolLM2-360M was trained on 4T tokens and Qwen3-0.6B on 36T tokens, versus 8.05B tokens
 (~500× and ~4500× less) for v3.0 on a single consumer GPU — the gap is primarily a data-budget
 difference. The instruction-tuned v3.0-it improves over the base on this suite (0.4002 vs
-0.3979 mean) and matches or beats it on six of seven tasks.
+0.3979 mean) and matches or beats it on six of seven tasks. MMLU/TruthfulQA were not re-run
+on the external models (—).
 
 ## Quick Start
 

@@ -13,6 +13,9 @@ Shipped model: `mikecovlee/tinymixtral-it` (HF Hub), shipped model `v3.0-it` (3M
 - Harness (canonical 7-task suite): 0.3979→0.4002 (+0.23pp; only ARC-Easy dips).
   BoolQ is excluded from the suite as an unstable sentinel (see
   `versions/v3.0-it/REPORT.md` §8.5).
+- Supplementary knowledge/truthfulness metrics (lm-eval 0.4.12, no chat template):
+  MMLU 5-shot 0.234→0.243, TruthfulQA MC2 0.417→0.412 — near-chance knowledge at this
+  scale, SFT-neutral (see `versions/v3.0-it/REPORT.md` §5.4).
 - Tooling: `versions/v3.0-it/data/build_dataset.py` (quota/dedup/decontam pipeline),
   `versions/v3.0-it/train_sft.py` + `--seed/--resume/--grad-accum/--keep-last`,
   `versions/v3.0-it/{eval,judge}` evaluation chain, `docs/DATA_LICENSES.md`,

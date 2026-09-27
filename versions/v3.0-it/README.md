@@ -50,6 +50,8 @@ RTX PRO 4500). The polish tier is a low-lr (5e-6) stratified subset run evaluate
 | GSM8K flexible | — | 0.0227 |
 | 7-task harness (canonical) | 0.3979 | **0.4002** |
 | LLM rubric (0-100, n=4,955) | 6.4 ± 0.18* | **15.0 ± 0.28** |
+| MMLU (acc, 5-shot) | 0.234 | **0.243** |
+| TruthfulQA MC2 (0-shot) | **0.417** | 0.412 |
 
 *baseline SFT arm on the same held-out prompts; paired delta +8.61 ± 0.28 (t = +30.7).
 Instruction following and answer quality rise sharply, and the 7-task harness edges up
@@ -57,6 +59,10 @@ Instruction following and answer quality rise sharply, and the 7-task harness ed
 or better. Canonical harness mean = acc_norm for hellaswag/piqa/arc_challenge/openbookqa,
 acc for winogrande/arc_easy/lambada (BoolQ was dropped from the suite as an unstable
 sentinel — see `REPORT.md` §8.5). Full tables and per-task numbers in `REPORT.md`.
+MMLU (5-shot) and TruthfulQA (MC2, 0-shot) are supplementary metrics: all arms sit near
+the 25% four-choice chance line on MMLU and around 0.41 on TruthfulQA MC2 — knowledge is
+capacity/data-budget-limited at this scale, and SFT does not move either metric
+(`REPORT.md` §5.4).
 
 ### Comparison with similar models
 
@@ -72,9 +78,12 @@ Same 7-task suite, measured locally (lm-evaluation-harness v0.4.12, 0-shot, cuda
 | OpenBookQA | acc_norm | 0.302 | 0.372 | 0.316 |
 | LAMBADA | acc | 0.289 | 0.532 | 0.401 |
 | **Mean** | — | 0.4002 | 0.5516 | 0.4821 |
+| MMLU | acc (5-shot) | 0.243 | — | — |
+| TruthfulQA | MC2 (0-shot) | 0.412 | — | — |
 
 SmolLM2-360M (4T tokens) and Qwen3-0.6B (36T tokens) are far above v3.0-it's 8.05B-token
-budget (~500× / ~4500×) — the gap is primarily a data-budget difference.
+budget (~500× / ~4500×) — the gap is primarily a data-budget difference. MMLU/TruthfulQA
+were not re-run on the external models (—).
 
 ## Quick start
 

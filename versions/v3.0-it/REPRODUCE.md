@@ -103,6 +103,9 @@ python -m lm_eval --model hf \
   --batch_size 16 --device cuda --output_path evals/harness/v3.0-it
 #   ... same with --tasks ifeval --apply_chat_template --batch_size 8 -> evals/ifeval/v3.0-it
 #   ... and with --tasks gsm8k --batch_size 8 -> evals/gsm8k/v3.0-it
+#   ... and with --tasks mmlu,truthfulqa_mc1,truthfulqa_mc2 --batch_size 16
+#       -> evals/newmetrics/<model>  (MMLU is 5-shot by default = literature standard;
+#          TruthfulQA is 0-shot; no chat template, same protocol as the 7-task suite)
 
 # 5) Consolidate (copy each newest evals/<task>/<model>/.../results_*.json to
 #    data/eval/<task>_<model>.json first)
@@ -137,12 +140,17 @@ Preregistered methodology (see lessons 8.3 in the report):
 | IFEval prompt/inst-strict | — | 0.0924/0.1894 | 0.0961/0.2014 | 0.1091/0.2026 | **0.1701/0.2794** |
 | GSM8K strict/flexible | — | —/0.0167 | 0.0159/0.0265 | 0.0174/0.0197 | 0.0205/**0.0227** |
 | 7-task harness (canonical) | 0.3979 | not run* | 0.3983 | 0.3962 | **0.4002** |
+| MMLU (acc, 5-shot) | 0.234 | — | 0.237 | 0.249 | 0.243 |
+| TruthfulQA MC1/MC2 (0-shot) | 0.237/0.417 | — | 0.239/0.408 | 0.235/0.407 | 0.252/0.412 |
 
 \* the only recorded baseline harness number used an unrecoverable legacy formula (pre-dating
 the BoolQ removal); not comparable with this table.
 
 Instruction following and open-ended quality (rubric, IFEval) improve sharply with scale
 while the 7-task harness stays within ±0.23pp of the base (the 3M tier leads slightly).
+MMLU (5-shot) sits at/below the 25% chance line (~0.23–0.25) and TruthfulQA MC2 is flat
+around 0.41 — knowledge is capacity/data-budget-limited at this scale and SFT does not
+move either metric (`REPORT.md` §5.4).
 BoolQ was dropped from the suite as an unstable sentinel (see `REPORT.md` §8.5). The
 50k-polish (50k rows, lr 5e-6, init=3M) verified as no
 gain (paired −0.15, t=−0.8) and is not needed to reproduce 3M. See

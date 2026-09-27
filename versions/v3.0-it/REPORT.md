@@ -93,6 +93,22 @@ Notes:
 2. The base 0.4272 / baseline 0.4260 recorded in the plan have no backing JSON on the work machine; their formula is unrecoverable. This table uses one canonical formula throughout, with base recomputed from the README v3.0 per-task table (0.3979 on the 7-task suite).
 3. The harness is a **regression guard, not an optimization target**. On the 7-task suite every stage sits within ±0.23pp of the base: 200k +0.04pp, 1M −0.17pp, 3M +0.23pp, polish +0.09pp. The earlier "trade-off" reading was driven almost entirely by BoolQ, which swung −19pp after 3M-row SFT while the other seven tasks stayed flat (see §8.5) — BoolQ has been dropped from the suite as an unstable sentinel. The only remaining net drag is arc_easy (0.478→0.448 at 3M); hellaswag/piqa/winogrande/arc_challenge/openbookqa/lambada stay flat or improve.
 
+### 5.4 Knowledge & truthfulness (MMLU, TruthfulQA — supplementary)
+
+| metric | base v3.0 | baseline | it-200k | it-1m | v3.0-it | it-polish |
+|---|---|---|---|---|---|---|
+| MMLU (acc, 5-shot) | 0.234 | — | 0.237 | 0.249 | 0.243 | 0.244 |
+| TruthfulQA MC1 (0-shot) | 0.237 | — | 0.239 | 0.235 | 0.252 | 0.252 |
+| TruthfulQA MC2 (0-shot) | 0.417 | — | 0.408 | 0.407 | 0.412 | 0.411 |
+
+Notes:
+1. Protocol: lm-eval-harness v0.4.12, no chat template (same as the 7-task suite);
+   MMLU is 5-shot (literature standard), TruthfulQA 0-shot; n = 14,042 (MMLU) / 817 (TruthfulQA).
+2. All arms sit at/below the 25% four-choice chance line on MMLU: knowledge is
+   capacity/data-budget-limited at 477M/8.05B tokens. TruthfulQA MC2 is flat
+   (~0.407–0.417), with the base slightly *higher* than the SFT arms; MC1 moves only
+   +0.2pp at 3M/polish. SFT does not materially move either metric.
+
 ## 6. Conclusions (through polish)
 
 - **rubric rises monotonically with scale**: 200k +5.04 / 1M +5.56 / 3M **+8.61 (t=+30.7)**, significant across 4,955 paired items; polish full-set 14.9±0.28 (**+8.46, t=+30.1**), paired polish−3M −0.15±0.18 (t=−0.8, noise) → low-lr polish is neutral-to-slightly-negative, as suspected.
