@@ -1,0 +1,6 @@
+$ErrorActionPreference = "Continue"
+$env:HTTP_PROXY = "http://127.0.0.1:7890"
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+$py = "C:\Users\mikecovlee\miniconda3\envs\tinymixtral\python.exe"
+$repo = "C:\Users\mikecovlee\tinymixtral-improve"
+& $py "$repo\deepseek_probe.py" 2>&1 | Out-File -Encoding ascii "$repo\logs\probe_status.log"
