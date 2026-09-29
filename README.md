@@ -1,3 +1,7 @@
+> This branch contains the independent native **tinymixtral-v3.0-downdp-adaptive-codeupdate** model.
+> See [CPT_MODEL.md](CPT_MODEL.md) for its configuration, training entry point and validation.
+> The upstream documentation below describes the original models and their results.
+
 # TinyMixtral
 
 A Mixtral-style Mixture-of-Experts causal language model for pretraining research on a single

@@ -351,7 +351,11 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
             if not torch.isfinite(grad_norm):
                 opt.zero_grad(set_to_none=True)
                 raise FloatingPointError(f"Non-finite gradient norm at step {step + 1}: {grad_norm.item()}")
+            model.validate_cpt_transaction(out["cpt_transaction"])
             opt.step()
+            model.commit_cpt_transaction(
+                out["cpt_transaction"], optimizer_step=model.get_cpt_optimizer_step() + 1,
+            )
             sched.step()
             opt.zero_grad(set_to_none=True)
             step += 1
