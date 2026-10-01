@@ -1,5 +1,5 @@
 torch>=2.0
-transformers>=4.50
+transformers>=4.50,<5
 datasets>=3.0
 sentencepiece>=0.2
 tokenizers>=0.15
@@ -19,3 +19,6 @@ pytest>=7
 
 # Evaluation (lm-evaluation-harness CLI used in README "Evaluation")
 lm-eval>=0.4.12
+
+# Chat UI (scripts/chat_ui.py)
+gradio>=5,<6

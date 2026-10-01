@@ -34,7 +34,8 @@ def main():
     ckpt = Path(args.checkpoint)
     bin_file = ckpt / "pytorch_model.bin"
     if not bin_file.exists():
-        print(f"ERROR: {bin_file} not found"); sys.exit(1)
+        print(f"ERROR: {bin_file} not found")
+        sys.exit(1)
 
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,10 @@ def main():
     print(f"Loaded {nM:.0f}M params, {len(state_dict)} keys")
 
     # 3. save_pretrained + 补充 auto_map
+    eos_id = config.eos_token_id if config.eos_token_id is not None else 2
+    pad_id = config.pad_token_id if config.pad_token_id is not None else eos_id
+    model.generation_config.eos_token_id = eos_id
+    model.generation_config.pad_token_id = pad_id
     model.save_pretrained(str(output), safe_serialization=False)
     cfg_path = output / "config.json"
     cfg = json.loads(cfg_path.read_text())
@@ -66,7 +71,16 @@ def main():
         "AutoModelForCausalLM": "modeling_tinymixtral.TinyMixtralForCausalLM",
     }
     cfg_path.write_text(json.dumps(cfg, indent=2))
-    print(f"Saved {output}/pytorch_model.bin + config.json (auto_map)")
+
+    # generation_config.json 里只写 _from_model_config 时，加载后 eos_token_id 会丢失，
+    # 导致 generate() 无法在 </s> 处停止；这里显式写入 eos/pad。
+    gen_path = output / "generation_config.json"
+    gen = json.loads(gen_path.read_text()) if gen_path.exists() else {}
+    gen.pop("_from_model_config", None)
+    gen["eos_token_id"] = eos_id
+    gen["pad_token_id"] = pad_id
+    gen_path.write_text(json.dumps(gen, indent=2))
+    print(f"Saved {output}/pytorch_model.bin + config.json (auto_map) + generation_config.json")
 
     # 4. 复制兼容层代码 + LICENSE 到 publish
     root = Path(__file__).parent.parent
@@ -98,7 +112,7 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"Ready: {output}/")
-    print(f"  from transformers import AutoModelForCausalLM")
+    print("  from transformers import AutoModelForCausalLM")
     print(f"  model = AutoModelForCausalLM.from_pretrained('{output}/', trust_remote_code=True)")
     print(f"{'='*60}")
 
