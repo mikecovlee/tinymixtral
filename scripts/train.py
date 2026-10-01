@@ -2,17 +2,27 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 """预训练：从零开始，按 token 或 step 目标运行。"""
+import argparse
+import glob
+import math
 import random
-import sys, argparse, glob, math
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
+
 from model.config import TinyMixtralConfig
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
-    check_checkpoint_disk_space, final_save, make_adamw, make_cosine_schedule,
-    make_val_evaluator, make_wsd_schedule, training_loop,
+    check_checkpoint_disk_space,
+    final_save,
+    make_adamw,
+    make_cosine_schedule,
+    make_val_evaluator,
+    make_wsd_schedule,
+    training_loop,
 )
 
 
@@ -75,7 +85,8 @@ def main():
     # ---- 数据 ----
     files = sorted(glob.glob(f"{args.cache_dir}/train_*.pt"))
     if not files:
-        print(f"ERROR: no .pt shards in {args.cache_dir}", flush=True); sys.exit(1)
+        print(f"ERROR: no .pt shards in {args.cache_dir}", flush=True)
+        sys.exit(1)
     print(f"Data: {len(files)} shards from {args.cache_dir}", flush=True)
 
     val_files = sorted(glob.glob(f"{args.val_dir}/val_*.pt")) if args.val_dir else []

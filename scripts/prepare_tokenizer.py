@@ -53,8 +53,9 @@ def save_hf_tokenizer(tokenizer_object, output_dir):
         unk_token="<unk>",
         pad_token="<pad>",
     )
-    tokenizer = apply_chat_template(tokenizer)
-    tokenizer = apply_chat_template(tokenizer)
+    template_path = Path(__file__).resolve().parent.parent / "tokenizer_src" / "chat_template.jinja"
+    if template_path.exists():
+        tokenizer.chat_template = template_path.read_text()
     tokenizer.save_pretrained(output_dir)
     print(f"HF tokenizer saved to {output_dir}")
     return tokenizer

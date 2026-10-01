@@ -15,7 +15,6 @@ Usage:
 import argparse
 import json
 import os
-import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -127,8 +126,8 @@ def stage_gen(args):
 
 
 def stage_judge(args):
-    A = {json.loads(l)["id"]: json.loads(l) for l in open(args.a, encoding="utf-8")}
-    B = {json.loads(l)["id"]: json.loads(l) for l in open(args.b, encoding="utf-8")}
+    A = {json.loads(line)["id"]: json.loads(line) for line in open(args.a, encoding="utf-8")}
+    B = {json.loads(line)["id"]: json.loads(line) for line in open(args.b, encoding="utf-8")}
     ids = [i for i in A if i in B and A[i]["response"].strip() and B[i]["response"].strip()]
     print(f"judge pairs: {len(ids)} (A={args.a}, B={args.b})", flush=True)
     key = get_key()

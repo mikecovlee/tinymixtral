@@ -13,7 +13,6 @@
 
 import argparse
 import shutil
-import sys
 from pathlib import Path
 
 
@@ -49,7 +48,7 @@ def main():
             p.error(f"{src} 中没有 train_*.pt shard")
         shard_groups.append(files)
 
-    for src, files, w in zip(args.sources, shard_groups, weights):
+    for src, files, w in zip(args.sources, shard_groups, weights, strict=False):
         total_tokens = 0
         for f in files:
             total_tokens += f.stat().st_size // 8  # int64 = 8 bytes
@@ -65,8 +64,8 @@ def main():
         src.resolve()
     ) or None
 
-    while any(p < len(g) for p, g in zip(pointers, shard_groups)):
-        for i, (files, weight) in enumerate(zip(shard_groups, weights)):
+    while any(p < len(g) for p, g in zip(pointers, shard_groups, strict=False)):
+        for i, (files, weight) in enumerate(zip(shard_groups, weights, strict=False)):
             taken = 0
             while taken < weight and pointers[i] < len(files):
                 src = files[pointers[i]]

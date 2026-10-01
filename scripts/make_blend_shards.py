@@ -78,7 +78,7 @@ def main():
     starts = args.start or [0] * n
 
     entries, val_entries = [], []
-    for src, take, vtake, start in zip(args.source, args.take, args.val_take, starts):
+    for src, take, vtake, start in zip(args.source, args.take, args.val_take, starts, strict=False):
         files = list_shards(src)
         take, vtake, start = int(take), int(vtake), int(start)
         if start < 0:
@@ -106,7 +106,7 @@ def main():
             sys.exit(f"ERROR: {vout} already exists")
         vout.mkdir(parents=True)
         vi = 0
-        for name, cnt, files in val_entries:
+        for _name, _cnt, files in val_entries:
             for f in files:
                 place(f, vout / f"val_{vi:04d}.pt", args.copy)
                 vi += 1

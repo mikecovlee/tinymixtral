@@ -58,7 +58,7 @@ def main():
     ifeval = sorted(glob.glob(os.path.join(args.dir, "ifeval_*.json")))
     gsm8k = sorted(glob.glob(os.path.join(args.dir, "gsm8k_*.json")))
 
-    print(f"== 7-task harness (canonical: acc_norm for hellaswag/piqa/arc_challenge/openbookqa) ==")
+    print("== 7-task harness (canonical: acc_norm for hellaswag/piqa/arc_challenge/openbookqa) ==")
     print(f"{'arm':28s} {'mean':>8s} {'alt_mix':>8s}")
     for path in harness:
         results, mean, mean_alt = harness_rows(path)
@@ -67,7 +67,7 @@ def main():
             for task, metric, _ in HARNESS_TASKS:
                 print(f"    {task:16s} {pick(results, task, metric):.5f}")
 
-    print(f"\n== IFEval ==")
+    print("\n== IFEval ==")
     print(f"{'arm':28s} {'prompt_str':>10s} {'inst_str':>9s} {'prompt_lo':>10s} {'inst_lo':>9s}")
     for path in ifeval:
         r = load(path)["results"]["ifeval"]
@@ -79,7 +79,7 @@ def main():
             f"{r.get('inst_level_loose_acc,none', float('nan')):9.4f}"
         )
 
-    print(f"\n== GSM8K ==")
+    print("\n== GSM8K ==")
     print(f"{'arm':28s} {'strict':>8s} {'flexible':>9s}")
     for path in gsm8k:
         r = load(path)["results"]["gsm8k"]

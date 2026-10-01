@@ -28,8 +28,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import torch
 import pyarrow.parquet as pq
+import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -187,7 +187,6 @@ def main():
     shard_idx = 0
     buf = []
     bufn = 0
-    abs_pos = 0  # 已写出的绝对 token 位置（从写窗口起点 0 计）
 
     def flush_shard():
         nonlocal buf, bufn, shard_idx

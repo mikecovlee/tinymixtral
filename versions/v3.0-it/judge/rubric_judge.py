@@ -83,12 +83,12 @@ def main():
     p.add_argument("--judge-model", default=None)
     a = p.parse_args()
     key = get_key()
-    items = [json.loads(l) for l in open(a.responses, encoding="utf-8") if l.strip()]
+    items = [json.loads(line) for line in open(a.responses, encoding="utf-8") if line.strip()]
     if a.limit:
         items = items[:a.limit]
     done = set()
     if a.resume and Path(a.out).exists():
-        done = {json.loads(l)["id"] for l in open(a.out, encoding="utf-8") if l.strip()}
+        done = {json.loads(line)["id"] for line in open(a.out, encoding="utf-8") if line.strip()}
     todo = [it for it in items if it["id"] not in done]
     print(f"scoring {len(todo)} items from {a.responses}")
     sums = {k: 0 for k in DIMS}

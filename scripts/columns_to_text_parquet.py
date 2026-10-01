@@ -44,7 +44,7 @@ def main():
             d = batch.to_pydict()
             cols = [d[c] for c in args.columns]
             buf = []
-            for vals in zip(*cols):
+            for vals in zip(*cols, strict=False):
                 t = args.sep.join(v or "" for v in vals)
                 if len(t) >= args.min_chars:
                     buf.append(t)

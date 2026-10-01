@@ -58,7 +58,6 @@ def main():
         m, se = mean_se(overall)
         print(line + f"  {m:5.1f}+-{se:.2f}")
 
-    ref = a.ref or str(Path(paths[0]).with_name(Path(paths[0]).name))
     ref_arm = "sft" if "sft" in data else list(data)[0]
     if ref_arm in data:
         print(f"\nPAIRED vs {ref_arm} (shared ids): delta +- se (t)")

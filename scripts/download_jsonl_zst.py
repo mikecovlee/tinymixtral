@@ -28,7 +28,7 @@ def list_files(session, repo, subdir, suffix):
             r = session.get(url, timeout=60)
             r.raise_for_status()
             break
-        except Exception as e:
+        except Exception:
             if attempt == 10:
                 raise
             time.sleep(min(30, 2 ** attempt))

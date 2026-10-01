@@ -135,7 +135,7 @@ def compute_rouge(predictions, references):
         ["rouge1", "rouge2", "rougeLsum"], use_stemmer=True)
     agg = {m: {"p": 0.0, "r": 0.0, "f": 0.0} for m in scorer.rouge_types}
     n = len(predictions)
-    for pred, ref in zip(predictions, references):
+    for pred, ref in zip(predictions, references, strict=False):
         scores = scorer.score(ref, pred)
         for m in scorer.rouge_types:
             agg[m]["p"] += scores[m].precision

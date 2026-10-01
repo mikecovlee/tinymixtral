@@ -16,8 +16,8 @@ import time
 from pathlib import Path
 
 import torch
-from transformers import AutoTokenizer
 from datasets import load_dataset
+from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from model.config import TinyMixtralConfig

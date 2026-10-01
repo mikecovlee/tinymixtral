@@ -9,7 +9,6 @@
 - 支持 activation checkpointing, FlashAttention (sdpa)
 """
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,7 +16,6 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import TinyMixtralConfig
-
 
 # ============================================================
 # RMSNorm
@@ -109,8 +107,8 @@ class GQAAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         B, S, _ = hidden_states.shape
 
@@ -173,7 +171,7 @@ class SparseMoE(nn.Module):
         self.expert_intermediate = config.expert_intermediate_size
         self.jitter_noise = config.router_jitter_noise
         self.aux_loss_coef = config.router_aux_loss_coef
-        self.last_expert_counts: Optional[torch.Tensor] = None
+        self.last_expert_counts: torch.Tensor | None = None
 
         # Router
         self.router = nn.Linear(self.hidden_size, self.num_experts, bias=False)
@@ -197,7 +195,7 @@ class SparseMoE(nn.Module):
         nn.init.normal_(self.up_proj, std=initializer_range)
         nn.init.normal_(self.down_proj, std=initializer_range)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch_size, seq_len, hidden_size]
@@ -288,9 +286,9 @@ class MoETransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # Self-attention
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -383,8 +381,8 @@ class TinyMixtralForCausalLM(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
         return_dict: bool = True,
     ) -> dict:
         """
@@ -445,7 +443,7 @@ class TinyMixtralForCausalLM(nn.Module):
             "aux_loss": total_aux_loss.detach(),
         }
 
-    def expert_utilization(self) -> Optional[list]:
+    def expert_utilization(self) -> list | None:
         """各专家在最近一次训练 forward 中被选中的 slot 占比（跨层聚合）。
 
         返回长度 num_local_experts 的浮点列表（和为 1），无统计时返回 None。
@@ -469,7 +467,7 @@ class TinyMixtralForCausalLM(nn.Module):
         torch.save(state_dict, f"{path}/pytorch_model.bin")
 
     @classmethod
-    def from_pretrained(cls, path: str, config: Optional[TinyMixtralConfig] = None) -> "TinyMixtralForCausalLM":
+    def from_pretrained(cls, path: str, config: TinyMixtralConfig | None = None) -> "TinyMixtralForCausalLM":
         """从 HF 格式加载模型。"""
         if config is None:
             config = TinyMixtralConfig.from_json_file(f"{path}/config.json")

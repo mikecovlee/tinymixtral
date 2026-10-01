@@ -107,7 +107,7 @@ def main():
     ds = load_dataset(args.dataset, split="train")
 
     examples = []
-    for i, ex in enumerate(ds):
+    for _i, ex in enumerate(ds):
         if args.max_samples and len(examples) >= args.max_samples:
             break
         dlg = ex.get("dialogue", "")
@@ -121,7 +121,7 @@ def main():
 
     print("Tokenizing...", flush=True)
     tokenized = []
-    for i, (dlg, summ) in enumerate(examples):
+    for _i, (dlg, summ) in enumerate(examples):
         ids, labs = format_and_tokenize(dlg, summ, tokenizer, args.seq_len)
         if len(ids) >= 10:
             tokenized.append((ids, labs))

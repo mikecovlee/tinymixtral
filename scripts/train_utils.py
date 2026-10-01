@@ -2,11 +2,14 @@
 # Open-source under the MIT License. See LICENSE for details.
 """train.py 和 resume.py 共享的训练逻辑。"""
 
-import math, sys, time, os, shutil, signal
+import math
+import os
+import shutil
+import signal
+import time
 from pathlib import Path
 
 import torch
-
 
 # ============================================================
 # 共享工具
@@ -311,8 +314,8 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
                           f"(shard {fi}/{len(files)-1}, ptr {ptr})", flush=True)
                     print(f"  WARNING: Reached dataset end before target {max_steps} steps "
                           f"({total_tok:,}/{max_steps*bs*seq:,} tokens consumed)", flush=True)
-                    print(f"  WARNING: Check --max-tokens vs dataset size, or provide more data. "
-                          f"Saving final checkpoint and exiting.", flush=True)
+                    print("  WARNING: Check --max-tokens vs dataset size, or provide more data. "
+                          "Saving final checkpoint and exiting.", flush=True)
                     break
                 fi += 1
                 ptr = 0

@@ -6,11 +6,15 @@
 用于补回只在终端 pane 打印、未落盘的 [eval] 终点，或对非分段产物的
 checkpoint 做同口径评估（与训练内 val evaluator 完全相同的批次/autocast）。
 """
-import math, sys, argparse, glob
+import argparse
+import glob
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
+
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import make_val_evaluator
 

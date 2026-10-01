@@ -82,7 +82,8 @@ class TinyMixtralConfig:
             return cls.from_dict(json.load(f))
 
     def save_pretrained(self, path: str):
-        import json, os
+        import json
+        import os
         os.makedirs(path, exist_ok=True)
         with open(f"{path}/config.json", "w") as f:
             json.dump(self.to_dict(), f, indent=2)

@@ -133,7 +133,7 @@ def main():
     rub = {a: load_rubric(os.path.join(args.dir, f"rubric_{a}.jsonl")) for a in models}
     ref_rows = rub.get(ref_name, {})
 
-    print("| model | rubric mean | rubric vs {} (Δ±se, t, n) | IFEval p-str | IFEval i-str | GSM8K strict | GSM8K flex | harness |".format(ref_name))
+    print(f"| model | rubric mean | rubric vs {ref_name} (Δ±se, t, n) | IFEval p-str | IFEval i-str | GSM8K strict | GSM8K flex | harness |")
     print("|---|---|---|---|---|---|---|---|")
     for a in models:
         m, se, n = mean_se(list(rub[a].values())) if rub[a] else (float("nan"), float("nan"), 0)

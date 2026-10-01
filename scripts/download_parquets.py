@@ -17,7 +17,6 @@
 """
 
 import argparse
-import os
 import sys
 import threading
 import time
@@ -63,7 +62,6 @@ def download_one(session, repo, path, size, outdir, verbose=True):
                     part.unlink(missing_ok=True)
                 if resp.status_code not in (200, 206):
                     raise RuntimeError(f"HTTP {resp.status_code}")
-                expected = size - have if resp.status_code == 206 else size
                 with open(part, "ab") as f:
                     for chunk in resp.iter_content(1 << 20):
                         f.write(chunk)

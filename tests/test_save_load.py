@@ -51,6 +51,6 @@ def test_strict_load_rejects_mismatch(tmp_path):
     )
     try:
         TinyMixtralForCausalLM.from_pretrained(str(tmp_path), config=cfg)
-        assert False, "expected strict load failure"
+        raise AssertionError("expected strict load failure")
     except RuntimeError as e:
         assert "q_norm" in str(e)

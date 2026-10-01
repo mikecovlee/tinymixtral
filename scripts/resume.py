@@ -2,15 +2,26 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 """从 checkpoint 恢复训练，自动沿用原始 token/step 目标。"""
-import math, sys, argparse, glob
+import argparse
+import glob
+import math
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
+
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
-    BF16AdamW, check_checkpoint_disk_space, final_save, make_adamw,
-    make_cosine_schedule, make_val_evaluator, make_wsd_schedule, training_loop,
+    BF16AdamW,
+    check_checkpoint_disk_space,
+    final_save,
+    make_adamw,
+    make_cosine_schedule,
+    make_val_evaluator,
+    make_wsd_schedule,
+    training_loop,
 )
 
 
@@ -61,7 +72,8 @@ def main():
         and all((d / name).is_file() for name in required_files)
     ])
     if not ckpts:
-        print(f"No checkpoints in {ckpt_dir}", flush=True); sys.exit(1)
+        print(f"No checkpoints in {ckpt_dir}", flush=True)
+        sys.exit(1)
     latest = ckpts[-1]
     step_done = int(latest.name.split("_")[1])
     print(f"Loading {latest} (step {step_done})...", flush=True)
@@ -105,7 +117,7 @@ def main():
         if "step" in state:
             step_done = state["step"]
         total_tok = state.get("total_tok", total_tok)
-        print(f"Loaded optimizer+scheduler state", flush=True)
+        print("Loaded optimizer+scheduler state", flush=True)
 
         saved_bs = state.get("batch_size")
         saved_seq = state.get("seq_len")
@@ -157,7 +169,7 @@ def main():
         saved_lrs = [pg["lr"] for pg in opt.param_groups]
         make_schedule = make_wsd_schedule if args.schedule == "wsd" else make_cosine_schedule
         sched = make_schedule(opt, warmup, total_steps)
-        for pg, lr in zip(opt.param_groups, saved_lrs):
+        for pg, lr in zip(opt.param_groups, saved_lrs, strict=False):
             pg["lr"] = lr
         if "sched" in state:
             sched.load_state_dict(state["sched"])
@@ -165,7 +177,8 @@ def main():
     # ---- 计算 shard+ptr ----
     files = sorted(glob.glob(f"{args.cache_dir}/train_*.pt"))
     if not files:
-        print(f"ERROR: no .pt shards in {args.cache_dir}", flush=True); sys.exit(1)
+        print(f"ERROR: no .pt shards in {args.cache_dir}", flush=True)
+        sys.exit(1)
     if is_posttrain:
         # 新数据集从头开始，fi=0, ptr=0 already set above
         pass

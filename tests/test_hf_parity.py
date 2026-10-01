@@ -18,11 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from model.config import TinyMixtralConfig as TrainConfig
-from model.modeling import TinyMixtralForCausalLM as TrainModel
-
 from hf.configuration_tinymixtral import TinyMixtralConfig as HFConfig  # noqa: E402
 from hf.modeling_tinymixtral import TinyMixtralForCausalLM as HFModel  # noqa: E402
+from model.config import TinyMixtralConfig as TrainConfig  # noqa: E402
+from model.modeling import TinyMixtralForCausalLM as TrainModel  # noqa: E402
 
 TINY = dict(
     vocab_size=97,

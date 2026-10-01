@@ -2,17 +2,15 @@
 # Open-source under the MIT License. See LICENSE for details.
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
-from transformers import PreTrainedModel, GenerationMixin
+from transformers import GenerationMixin, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 from .configuration_tinymixtral import TinyMixtralConfig
-
 
 # ============================================================
 # Layers
@@ -217,9 +215,9 @@ class MoETransformerBlock(nn.Module):
 
 @dataclass
 class CausalLMOutputWithPast(ModelOutput):
-    loss: Optional[torch.Tensor] = None
+    loss: torch.Tensor | None = None
     logits: torch.Tensor = None
-    past_key_values: Optional[tuple] = None
+    past_key_values: tuple | None = None
 
 
 class TinyMixtralForCausalLM(PreTrainedModel, GenerationMixin):

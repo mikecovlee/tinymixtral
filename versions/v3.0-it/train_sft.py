@@ -13,13 +13,13 @@ Usage:
 
 import argparse
 import math
-import numpy as np
 import os
 import random
 import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -180,7 +180,7 @@ def main():
 
     print("Tokenizing...", flush=True)
     tokenized = []
-    for i, (text, spans) in enumerate(zip(texts, spans_list)):
+    for i, (text, spans) in enumerate(zip(texts, spans_list, strict=False)):
         ids, labs = tokenize_with_mask(text, spans, tokenizer)
         if len(ids) >= 10:
             tokenized.append((np.asarray(ids, dtype=np.int32),

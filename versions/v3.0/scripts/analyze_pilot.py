@@ -118,7 +118,7 @@ def main():
         for i, path in enumerate(args.logs):
             name = f"cell{i + 1}"
             txt = Path(path).read_text(errors="replace").splitlines()
-            m = next((CFG_RE.search(l) for l in txt if CFG_RE.search(l)), None)
+            m = next((CFG_RE.search(line) for line in txt if CFG_RE.search(line)), None)
             if m:
                 name = m.group(1)
             cells[name] = txt
