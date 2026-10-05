@@ -131,6 +131,7 @@ def check_inverse_sqrt(d: int, failures: list) -> None:
 
 
 def main() -> None:
+    random.seed(0xC0FFEE)  # deterministic sampling: runs are reproducible
     random_cases = int(sys.argv[1]) if len(sys.argv) > 1 else 200_000
     failures: list = []
     checked = 0
