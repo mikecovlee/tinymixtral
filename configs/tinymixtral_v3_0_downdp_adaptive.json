@@ -28,7 +28,7 @@
   "cpt_expert_temperature": "3/5",
   "cpt_state_step_size": null,
   "cpt_state_radius": "1",
-  "cpt_state_chunk_size": 128,
+  "cpt_state_chunk_size": 16,
   "cpt_state_corrector": true,
   "cpt_eps_z": "1/1000000",
   "cpt_eps_m": "1/1000000",

@@ -42,7 +42,7 @@ class CPTConfig(TinyMixtralConfig):
     cpt_expert_temperature: float | str = "3/5"
     cpt_state_step_size: float | str | None = None
     cpt_state_radius: float | str = "1"
-    cpt_state_chunk_size: int = 128
+    cpt_state_chunk_size: int = 16
     cpt_state_corrector: bool = True
     cpt_eps_z: float | str = "1/1000000"
     cpt_eps_m: float | str = "1/1000000"
@@ -173,9 +173,15 @@ class CPTConfig(TinyMixtralConfig):
         default_state_step_size = Fraction(1, 10) / (1 + exact["cpt_lambda_sa"])
         state_step_size = default_state_step_size if exact["cpt_state_step_size"] is None else exact["cpt_state_step_size"]
         self.cpt_state_step_size = rational_fp32("cpt_state_step_size", state_step_size)
-        max_state_step = 1.0 / (2.0 * (1.0 + self.cpt_lambda_sa))
+        max_state_step = 2.0 / (self.cpt_state_chunk_size * (1.0 + self.cpt_lambda_sa))
+        # One aggregated chunk step covers ~cpt_state_chunk_size sequential
+        # per-token steps; without the chunk factor the quadratic state map
+        # overshoots (its Jacobian 1 - eta*C*(m + lambda) flips sign) and the
+        # state saturates at the radius ball.
         if not 0.0 < self.cpt_state_step_size <= max_state_step:
-            raise ValueError("cpt_state_step_size must be in (0, 1 / (2 * (1 + cpt_lambda_sa))]")
+            raise ValueError(
+                "cpt_state_step_size must be in (0, 2 / (cpt_state_chunk_size * (1 + cpt_lambda_sa))]"
+            )
         if self.cpt_energy_init_scale <= 0.0:
             raise ValueError("cpt_energy_init_scale must be positive")
         if self.cpt_price_learning_rate <= 0.0:

@@ -111,6 +111,22 @@ rollback succeeds. Commits are atomic across layers (all routers update or none)
   `no_weight_decay_parameters()`. Changing optimizer grouping means
   `training_state.pt` produced by earlier revisions of this code cannot resume;
   re-run from a model checkpoint.
+- **Sequence state.** The state `(S, nu)` advances once per chunk as one
+  aggregated step; `cpt_state_step_size` is bounded by
+  `2 / (cpt_state_chunk_size * (1 + cpt_lambda_sa))` so the aggregated step
+  cannot overshoot the state ball (violating it distorts routing at the
+  percent level). The default chunk is 16, which tracks the strict sequential
+  semantics closely; raising the chunk requires lowering the step
+  proportionally. The responsibility trajectory is computed in bounded
+  sub-blocks, so arbitrarily long chunks stay FP32-finite. The mixing weight
+  `beta` saturates at `beta_max * nu/(nu+kappa)` ≈ 0.225 under uniform
+  routing, so the sequence state modulates prototypes modestly; the learned
+  anchors/energy carry most of the routing.
+- **Price dynamics.** The dead-zone controller moves congestion prices by
+  about `price_learning_rate * control` ≈ 0.001 per commit (~0.002 in logit
+  units); cancelling a persistent expert advantage of order 1 therefore takes
+  hundreds of commits. Prices integrate (no decay), so imbalance is always
+  corrected eventually; watch `util%` in training logs for early collapse.
 - **Performance.** The compiled CUDA path unrolls the chunk loop (at most 128
   chunks; raise `cpt_state_chunk_size` for long sequences instead of falling
   back to eager). The predictor-corrector pass costs roughly 2-3x the routing

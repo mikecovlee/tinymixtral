@@ -40,8 +40,14 @@ CPT_ROUTER_ALGORITHM_VERSION = 2
 
 # Full-forward compilation unrolls the chunk loop; compile time grows with the
 # number of chunks, so only compile when the unroll stays moderate.  Larger
-# sequences should raise ``cpt_state_chunk_size`` rather than drop to eager.
+# sequences should raise ``cpt_state_chunk_size`` (and lower
+# ``cpt_state_step_size`` to keep the step bound) rather than drop to eager.
 _MAX_COMPILED_CHUNKS = 128
+
+# The responsibility trajectory is walked in sub-blocks of this many positions
+# so its rho^{-b} factorization stays inside the FP32 range (see
+# ``CPTRouter._responsibility_trajectory``).
+_RESPONSIBILITY_SUB_BLOCK = 512
 
 
 @dataclass(frozen=True)
@@ -389,14 +395,52 @@ class CPTRouter(nn.Module):
             )
 
             valid_float = valid_chunk.to(torch.float32)
-            valid_before = valid_float.cumsum(dim=1) - valid_float
-            inverse_decay = rho.pow(-(valid_before + 1.0)).unsqueeze(-1)
-            weighted_probabilities = q_chunk.detach() * inverse_decay
-            exclusive_weighted = weighted_probabilities.cumsum(dim=1) - weighted_probabilities
-            responsibility_trajectory = rho.pow(valid_before).unsqueeze(-1) * (nu_old.unsqueeze(1) + exclusive_weighted)
+            responsibility_trajectory = self._responsibility_trajectory(valid_float, q_chunk.detach(), nu_old, rho)
             beta_trajectory = self.beta_max * responsibility_trajectory / (responsibility_trajectory + self.kappa_beta)
 
         return state_trajectory, beta_trajectory
+
+    @staticmethod
+    def _responsibility_trajectory(
+        valid_float: torch.Tensor,
+        q_detached: torch.Tensor,
+        nu_old: torch.Tensor,
+        rho: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-position nu^(t): the responsibility state entering each position.
+
+        Exact sequential unrolling:
+        ``nu^(t) = rho^{b_t} nu_old + sum_{s<t} q_s rho^{b_t - b_s - 1}``,
+        where ``b_t`` counts valid tokens before ``t``.  One global
+        ``rho^{-b}`` prefix-sum factorization overflows FP32 beyond ~1700 valid
+        tokens in a chunk (and its exclusive prefix then produces inf - inf),
+        so the chunk is walked in sub-blocks with bounded relative exponents,
+        carrying ``nu`` across sub-blocks sequentially.  Invalid positions are
+        skipped entirely (no decay, no mass), matching the sequential update;
+        single-token sub-blocks recover the plain sequential recursion exactly.
+        """
+        batch, length, _ = q_detached.shape
+        trajectory = torch.empty(
+            batch,
+            length,
+            nu_old.shape[-1],
+            device=q_detached.device,
+            dtype=torch.float32,
+        )
+        nu_entry = nu_old
+        for start in range(0, length, _RESPONSIBILITY_SUB_BLOCK):
+            end = min(start + _RESPONSIBILITY_SUB_BLOCK, length)
+            valid = valid_float[:, start:end]
+            local_before = valid.cumsum(dim=1) - valid
+            inverse_decay = rho.pow(-(local_before + 1.0)).unsqueeze(-1)
+            weighted = q_detached[:, start:end] * valid.unsqueeze(-1) * inverse_decay
+            exclusive = weighted.cumsum(dim=1) - weighted
+            trajectory[:, start:end] = rho.pow(local_before).unsqueeze(-1) * (
+                nu_entry.unsqueeze(1) + exclusive
+            )
+            block_valid = valid.sum(dim=1)
+            nu_entry = rho.pow(block_valid).unsqueeze(-1) * (nu_entry + weighted.sum(dim=1))
+        return trajectory
 
     def expert_kernel(self) -> torch.Tensor:
         """Return B in R^{K x N}, row-normalized over experts."""
@@ -418,7 +462,8 @@ class CPTRouter(nn.Module):
         On CUDA during training the implementation is compiled on first use so
         the chunk loop runs as fused kernels.  Compilation unrolls the loop, so
         it is skipped when the chunk count exceeds ``_MAX_COMPILED_CHUNKS``;
-        raise ``cpt_state_chunk_size`` to keep long sequences on the fast path.
+        raise ``cpt_state_chunk_size`` (lowering ``cpt_state_step_size`` to
+        respect the step bound) to keep long sequences on the fast path.
         CPU and eval paths stay eager for determinism and to avoid recompiling
         on variable lengths.
         """

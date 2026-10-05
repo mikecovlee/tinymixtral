@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from cpt_model import CPTConfig, CPTRouter, CPTRouterOutput
 
 
-def router_config(hidden_size=16, chunk_size=2):
+def router_config(hidden_size=16, chunk_size=2, **overrides):
     return CPTConfig(
         hidden_size=hidden_size,
         num_hidden_layers=1,
@@ -19,6 +19,7 @@ def router_config(hidden_size=16, chunk_size=2):
         num_local_experts=4,
         num_experts_per_tok=2,
         cpt_state_chunk_size=chunk_size,
+        **overrides,
     )
 
 
@@ -106,7 +107,10 @@ class CodeUpdateTests(unittest.TestCase):
     def test_dp7_cuda_inductor_forward_backward_and_checkpoint(self):
         self.assertTrue(torch.cuda.is_available(), 'CUDA device required')
         torch.manual_seed(17)
-        config = router_config(hidden_size=1024, chunk_size=128)
+        # chunk=128 must satisfy the chunk-aware step bound
+        # state_step <= 2 / (chunk * (1 + lambda_sa)); keep the big-chunk
+        # compiled scenario with an explicit compliant step.
+        config = router_config(hidden_size=1024, chunk_size=128, cpt_state_step_size="1/100")
         eager = CPTRouter(config, 0).cuda().train()
         candidate = CPTRouter(config, 0).cuda().train()
         candidate.load_state_dict(eager.state_dict())
