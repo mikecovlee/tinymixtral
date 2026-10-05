@@ -1,7 +1,7 @@
 # TinyMixtral v3.0 Dense-Active-276M
 
 Dense ablation of [TinyMixtral v3.0](../v3.0/README.md) at **matched active parameters and
-FLOPs**. Where the earlier [v3.0-dense](../v3.0-dense/README.md) experiment matched *total*
+FLOPs**. Where the earlier v3.0-dense experiment matched *total*
 parameters (477.4M dense vs 477.5M MoE), this run matches *active* parameters: 276M dense vs
 276.1M active MoE — the same compute budget per token. The goal is to isolate what MoE routing
 buys when both models see identical data, identical training recipe, and identical per-token
