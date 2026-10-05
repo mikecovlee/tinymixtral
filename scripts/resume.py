@@ -53,6 +53,8 @@ def main():
                    help="每次 val 评估消耗的 token 上限")
     p.add_argument("--chunked-ce", action="store_true",
                    help="分块计算 CE，避免物化完整 fp32 logits（省 ~2-3GB 显存）")
+    p.add_argument("--no-grad-ckpt", action="store_true",
+                   help="关闭 activation checkpointing（提速 ~1.3-1.5x，激活显存上升；数学等价）")
     args = p.parse_args()
     if args.batch_size <= 0 or args.seq_len <= 0:
         p.error("batch-size and seq-len must be positive")
@@ -85,11 +87,15 @@ def main():
             f"seq-len {args.seq_len} exceeds model limit "
             f"{model.config.max_position_embeddings}"
         )
-    model.gradient_checkpointing_enable()
+    if args.no_grad_ckpt:
+        model.gradient_checkpointing_disable()
+    else:
+        model.gradient_checkpointing_enable()
     model.use_chunked_ce = args.chunked_ce
     model = model.to("cuda").to(torch.bfloat16)
     nM = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"Model: {nM:.0f}M params", flush=True)
+    print(f"Model: {nM:.0f}M params grad_ckpt={not args.no_grad_ckpt} "
+          f"chunked_ce={args.chunked_ce}", flush=True)
 
     # ---- 优化器 + state ----
     bs, seq = args.batch_size, args.seq_len

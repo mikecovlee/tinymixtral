@@ -192,13 +192,38 @@ class SparseMoE(nn.Module):
         return out.view(B, S, D), aux
 
 
+class DenseFFN(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.intermediate = config.expert_intermediate_size
+        self.gate_proj = nn.Parameter(torch.empty(self.intermediate, self.hidden_size))
+        self.up_proj = nn.Parameter(torch.empty(self.intermediate, self.hidden_size))
+        self.down_proj = nn.Parameter(torch.empty(self.hidden_size, self.intermediate))
+        self._init_weights()
+
+    def _init_weights(self, std=0.02):
+        nn.init.normal_(self.gate_proj, std=std)
+        nn.init.normal_(self.up_proj, std=std)
+        nn.init.normal_(self.down_proj, std=std)
+
+    def forward(self, x):
+        B, S, D = x.shape
+        x_flat = x.view(-1, D)
+        gate = F.silu(x_flat @ self.gate_proj.T)
+        up = x_flat @ self.up_proj.T
+        out = gate * up @ self.down_proj.T
+        aux = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        return out.view(B, S, D), aux
+
+
 class MoETransformerBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.self_attn = GQAAttention(config)
-        self.moe = SparseMoE(config)
+        self.moe = DenseFFN(config) if config.num_local_experts == 0 else SparseMoE(config)
 
     def forward(self, x, attention_mask=None, position_ids=None, past_key_value=None, use_cache=False):
         attn_out, new_cache = self.self_attn(
