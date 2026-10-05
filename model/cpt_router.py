@@ -13,16 +13,18 @@ Theory uses column vectors.  For one token ``x_t in R^{d x 1}``:
 The implementation stores tokens row-major, hence the final equivalent
 operation is ``pi_t.T = q_t.T @ B``.  There is deliberately no softmax
 after this product. Tokens in one state chunk share its entry state and are
-routed in parallel; setting ``cpt_state_chunk_size=1`` recovers strict v1.
+routed in parallel; setting ``cpt_state_chunk_size=1`` recovers the strict
+sequential per-token semantics.
 
 With ``cpt_state_corrector=True`` (the default) a predictor-corrector pass
 refines the chunk probabilities: pass one routes from the entry state, then a
 first-order per-position trajectory of ``(S, nu)`` built from the pass-one
 responsibilities (exclusive prefix sums, all parallel) yields corrected
 per-position prototypes for pass two.  The trajectory correction vanishes for
-single-token chunks, so ``cpt_state_chunk_size=1`` still recovers strict v1
-exactly.  Setting ``cpt_state_corrector=False`` restores the frozen blockwise
-semantics (every token routed from the chunk entry state).
+single-token chunks, so ``cpt_state_chunk_size=1`` still recovers the strict
+sequential per-token semantics exactly.  Setting ``cpt_state_corrector=False``
+restores the frozen blockwise semantics (every token routed from the chunk
+entry state).
 """
 
 from dataclasses import dataclass
@@ -31,7 +33,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .config import CPT_ROUTING_ARCHITECTURE_FIELDS, TinyMixtralConfig
+from .cpt_config import CPT_ROUTING_ARCHITECTURE_FIELDS, CPTConfig
 from .cpt_numerics import stable_l2
 
 CPT_ROUTER_ALGORITHM_VERSION = 2
@@ -58,6 +60,9 @@ class CPTTransaction:
 
     proposals: tuple[CPTLayerProposal, ...]
     consumed: bool = False
+    # Set from ``model.training`` when the forward produced this transaction;
+    # eval/inference forwards must never commit CPT state.
+    training_forward: bool = True
 
 
 @dataclass(frozen=True)
@@ -68,7 +73,7 @@ class CPTRouterOutput:
 
 
 class CPTRouter(nn.Module):
-    """CPT v1 Router for a single MoE layer.
+    """CPT Router for a single MoE layer.
 
     ``projection``, ``anchors`` and ``energy`` (the code name for
     ``Theta_C``) are learnable.  The congestion price, optimizer step and
@@ -77,7 +82,7 @@ class CPTRouter(nn.Module):
     batch row.
     """
 
-    def __init__(self, config: TinyMixtralConfig, layer_index: int):
+    def __init__(self, config: CPTConfig, layer_index: int):
         super().__init__()
         if isinstance(layer_index, bool) or not isinstance(layer_index, int):
             raise ValueError("layer_index must be an integer")
@@ -736,7 +741,7 @@ class CPTRouter(nn.Module):
         if int(self.router_algorithm_version.item()) != CPT_ROUTER_ALGORITHM_VERSION:
             raise RuntimeError("unsupported CPT Router algorithm version")
 
-    def validate_config_binding(self, config: TinyMixtralConfig) -> None:
+    def validate_config_binding(self, config: CPTConfig) -> None:
         """Reject saving a config that no longer describes this live Router."""
         architecture = {field: getattr(config, field) for field in CPT_ROUTING_ARCHITECTURE_FIELDS}
         changed_architecture = sorted(

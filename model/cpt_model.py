@@ -1,16 +1,44 @@
+# Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
+# Open-source under the MIT License. See LICENSE for details.
+
+"""CPT transaction protocol for models that host CPTRouter layers.
+
+A model forward produces one CPTTransaction carrying each layer's *actual*
+host dispatch.  The training loop validates the transaction before an
+optimizer update and commits it once afterwards; a commit updates every
+Router's prices/anchors/state version atomically or none of them.
+
+Gradient accumulation merges any sequence of transactions produced against
+the same state version into a single price update.  Transactions produced by
+non-training forwards and any commit under distributed process groups are
+rejected: prices are process-local state and DDP/FSDP are unsupported.
+"""
+
+from collections.abc import Sequence
 
 import torch
 from torch import nn
 
-from .cpt_router import CPT_ROUTER_ALGORITHM_VERSION, CPTRouter, CPTTransaction
+from .cpt_router import CPT_ROUTER_ALGORITHM_VERSION, CPTLayerProposal, CPTRouter, CPTTransaction
 
 
 class CPTModelMixin:
+    def _require_cpt(self) -> None:
+        if not getattr(self, "is_cpt", False):
+            raise RuntimeError("this model uses the linear Router; CPT transactions are unavailable")
+
     def _cpt_routers(self) -> tuple[CPTRouter, ...]:
         return tuple(layer.moe.cpt_router for layer in self.layers)
 
     def cpt_trainable_parameters(self) -> tuple[nn.Parameter, ...]:
+        self._require_cpt()
         return tuple(parameter for router in self._cpt_routers() for parameter in router.trainable_parameters())
+
+    def no_weight_decay_parameters(self) -> tuple[nn.Parameter, ...]:
+        """免权重衰减参数：CPT anchors 约束在单位球面，衰减无意义。"""
+        if not getattr(self, "is_cpt", False):
+            return ()
+        return tuple(router.anchors for router in self._cpt_routers())
 
     def _validate_cpt_config_binding(self) -> None:
         for layer_index, (layer, router) in enumerate(zip(self.layers, self._cpt_routers(), strict=False)):
@@ -27,6 +55,7 @@ class CPTModelMixin:
         *,
         require_unit_anchors: bool = True,
     ) -> None:
+        self._require_cpt()
         self._validate_cpt_config_binding()
         versions: list[int] = []
         optimizer_steps: list[int] = []
@@ -42,6 +71,7 @@ class CPTModelMixin:
             raise RuntimeError("CPT layer optimizer steps disagree: " f"{optimizer_steps}")
 
     def get_cpt_state_version(self) -> int:
+        self._require_cpt()
         versions = [int(router.state_version.item()) for router in self._cpt_routers()]
         if not versions:
             raise RuntimeError("model has no CPT Routers")
@@ -50,6 +80,7 @@ class CPTModelMixin:
         return versions[0]
 
     def get_cpt_optimizer_step(self) -> int:
+        self._require_cpt()
         optimizer_steps = [int(router.optimizer_step.item()) for router in self._cpt_routers()]
         if not optimizer_steps:
             raise RuntimeError("model has no CPT Routers")
@@ -57,37 +88,95 @@ class CPTModelMixin:
             raise RuntimeError("CPT layer optimizer steps disagree: " f"{optimizer_steps}")
         return optimizer_steps[0]
 
-    def validate_cpt_transaction(self, transaction: CPTTransaction) -> None:
-        if not isinstance(transaction, CPTTransaction):
+    @staticmethod
+    def _normalize_transactions(transactions) -> tuple:
+        """Accept one transaction or a sequence (gradient accumulation)."""
+        if transactions is None:
             raise TypeError("model output is missing a valid CPT transaction")
-        if transaction.consumed:
-            raise RuntimeError("CPT transaction was already consumed")
+        if isinstance(transactions, CPTTransaction):
+            normalized = (transactions,)
+        elif isinstance(transactions, Sequence):
+            normalized = tuple(transactions)
+        else:
+            raise TypeError("CPT transactions must be a CPTTransaction or a sequence of them")
+        if not normalized:
+            raise RuntimeError("no CPT transactions were provided")
+        return normalized
+
+    @staticmethod
+    def _merge_proposals(routers: tuple, transactions: tuple) -> list:
+        """Merge micro-batch proposals per layer.
+
+        Actual dispatched loads add up across micro-batches; the merged
+        proposal drives one price update and one state-version advance.
+        Every transaction must already validate against the live state.
+        """
+        merged = []
+        for layer_index, router in enumerate(routers):
+            hits = torch.zeros(router.num_experts, dtype=torch.int64, device=router.congestion_price.device)
+            token_count = 0
+            version = router.state_version
+            for transaction in transactions:
+                proposal = transaction.proposals[layer_index]
+                hits = hits + proposal.expert_hits
+                token_count += int(proposal.token_count.item())
+                version = proposal.state_version
+            merged_proposal = CPTLayerProposal(
+                layer_index,
+                hits,
+                router.state_version.new_tensor(token_count),
+                version.detach().clone(),
+            )
+            router.validate_proposal(merged_proposal)
+            merged.append(merged_proposal)
+        return merged
+
+    def validate_cpt_transaction(self, transactions) -> None:
+        self._require_cpt()
+        normalized = self._normalize_transactions(transactions)
         self._validate_cpt_config_binding()
         routers = self._cpt_routers()
-        if not isinstance(transaction.proposals, tuple):
-            raise TypeError("CPT transaction proposals must be a tuple")
-        if len(transaction.proposals) != len(routers):
-            raise RuntimeError("CPT transaction does not cover every MoE layer")
         self.get_cpt_state_version()
-        token_counts: list[int] = []
-        for router, proposal in zip(routers, transaction.proposals, strict=False):
-            router.validate_proposal(proposal)
-            token_counts.append(int(proposal.token_count.item()))
-        if token_counts and len(set(token_counts)) != 1:
-            raise RuntimeError(f"CPT layer token counts disagree: {token_counts}")
+        for transaction in normalized:
+            if not isinstance(transaction, CPTTransaction):
+                raise TypeError("model output is missing a valid CPT transaction")
+            if transaction.consumed:
+                raise RuntimeError("CPT transaction was already consumed")
+            if not transaction.training_forward:
+                raise RuntimeError("cannot commit CPT state from a non-training forward")
+            if not isinstance(transaction.proposals, tuple):
+                raise TypeError("CPT transaction proposals must be a tuple")
+            if len(transaction.proposals) != len(routers):
+                raise RuntimeError("CPT transaction does not cover every MoE layer")
+            token_counts: list[int] = []
+            for router, proposal in zip(routers, transaction.proposals, strict=False):
+                router.validate_proposal(proposal)
+                token_counts.append(int(proposal.token_count.item()))
+            if token_counts and len(set(token_counts)) != 1:
+                raise RuntimeError(f"CPT layer token counts disagree: {token_counts}")
 
     @torch.no_grad()
     def commit_cpt_transaction(
         self,
-        transaction: CPTTransaction,
+        transactions,
         *,
         optimizer_step: int | None = None,
     ) -> int:
-        """Commit all Router prices/anchors/versions, or none of them."""
-        if bool(getattr(self, "_tinymixtral_fail_stop", False)):
-            raise RuntimeError("training state is fail-stop poisoned; restore the last " "successful checkpoint")
+        """Commit all Router prices/anchors/versions, or none of them.
+
+        Accepts one transaction or a sequence of transactions produced since
+        the last commit (gradient accumulation); their actual dispatched
+        loads merge into a single price update.
+        """
+        self._require_cpt()
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            raise RuntimeError(
+                "CPT commits require single-process training; DDP/FSDP are "
+                "unsupported because congestion prices are process-local state"
+            )
+        normalized = self._normalize_transactions(transactions)
         try:
-            self.validate_cpt_transaction(transaction)
+            self.validate_cpt_transaction(normalized)
             current_optimizer_step = self.get_cpt_optimizer_step()
             if optimizer_step is None:
                 optimizer_step = current_optimizer_step
@@ -99,19 +188,22 @@ class CPTModelMixin:
             ):
                 raise RuntimeError("CPT optimizer_step must stay unchanged or advance by one")
         except BaseException:
-            if isinstance(transaction, CPTTransaction):
-                transaction.consumed = True
+            for transaction in normalized:
+                if isinstance(transaction, CPTTransaction):
+                    transaction.consumed = True
             raise
         # A commit attempt is single-use.  Any later preparation, write, or
-        # validation failure discards this proposal even when rollback succeeds.
-        transaction.consumed = True
+        # validation failure discards these proposals even when rollback succeeds.
+        for transaction in normalized:
+            transaction.consumed = True
         routers = self._cpt_routers()
+        merged = self._merge_proposals(routers, normalized)
         prepared = [
             router.prepare_commit(
                 proposal,
                 optimizer_step=optimizer_step,
             )
-            for router, proposal in zip(routers, transaction.proposals, strict=False)
+            for router, proposal in zip(routers, merged, strict=False)
         ]
         snapshots = [router.commit_snapshot() for router in routers]
         try:
@@ -133,12 +225,17 @@ class CPTModelMixin:
         return self.get_cpt_state_version()
 
     @staticmethod
-    def abort_cpt_transaction(transaction: CPTTransaction | None) -> None:
-        if transaction is None:
+    def abort_cpt_transaction(transactions) -> None:
+        if transactions is None:
             return
-        if not isinstance(transaction, CPTTransaction):
+        if isinstance(transactions, CPTTransaction):
+            transactions = (transactions,)
+        elif not isinstance(transactions, Sequence):
             raise TypeError("cannot abort an invalid CPT transaction")
-        transaction.consumed = True
+        for transaction in transactions:
+            if not isinstance(transaction, CPTTransaction):
+                raise TypeError("cannot abort an invalid CPT transaction")
+            transaction.consumed = True
 
     def _validate_serialized_cpt_state(self, state_dict) -> None:
         if not hasattr(state_dict, "keys"):
@@ -146,7 +243,7 @@ class CPTModelMixin:
         keys = tuple(state_dict.keys())
         legacy = [key for key in keys if key.endswith(".moe.router.weight")]
         if legacy:
-            raise RuntimeError("legacy Linear Router checkpoints are incompatible with CPT v1: " + ", ".join(legacy))
+            raise RuntimeError("legacy Linear Router checkpoints are incompatible with the CPT Router: " + ", ".join(legacy))
 
         marker = ".moe.cpt_router."
         expected_state = super().state_dict()
@@ -208,6 +305,8 @@ class CPTModelMixin:
             raise RuntimeError("checkpoint CPT optimizer_step exceeds state_version")
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
+        if not getattr(self, "is_cpt", False):
+            return super().load_state_dict(state_dict, strict=strict, assign=assign)
         self._validate_cpt_config_binding()
         self._validate_serialized_cpt_state(state_dict)
         result = super().load_state_dict(

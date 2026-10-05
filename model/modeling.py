@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import TinyMixtralConfig
+from .cpt_config import CPTConfig, config_from_json_file
 from .cpt_model import CPTModelMixin
 from .cpt_router import CPTLayerProposal, CPTRouter, CPTTransaction
 
@@ -163,18 +164,31 @@ class SparseMoE(nn.Module):
 
     每个 token 通过 top-k gating 路由到 k 个 expert。
     Expert 使用 SwiGLU 激活。
+
+    路由器由配置类决定：TinyMixtralConfig 使用主分支的线性路由器
+    （含 aux loss / jitter），CPTConfig 使用 CPT 概率路由器。两种模式
+    都返回 (out, aux_loss)；CPT 模式把实际分配统计记录在
+    last_expert_counts / last_token_count，供 CPT 事务收集。
     """
 
-    def __init__(self, config: TinyMixtralConfig, layer_index: int):
+    def __init__(self, config: TinyMixtralConfig, layer_index: int = 0):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
         self.expert_intermediate = config.expert_intermediate_size
         self.last_expert_counts: torch.Tensor | None = None
+        self.last_token_count: torch.Tensor | None = None
 
         # Router
-        self.cpt_router = CPTRouter(config, layer_index)
+        self.is_cpt = isinstance(config, CPTConfig)
+        if self.is_cpt:
+            self.cpt_router = CPTRouter(config, layer_index)
+        else:
+            self.cpt_router = None
+            self.router = nn.Linear(self.hidden_size, self.num_experts, bias=False)
+            self.jitter_noise = config.router_jitter_noise
+            self.aux_loss_coef = config.router_aux_loss_coef
 
         # Expert 参数：每个 expert 有 gate_proj, up_proj, down_proj
         # 使用 3D 权重 [num_experts, intermediate, hidden] 方便实现
@@ -195,14 +209,88 @@ class SparseMoE(nn.Module):
         nn.init.normal_(self.up_proj, std=initializer_range)
         nn.init.normal_(self.down_proj, std=initializer_range)
 
-    def forward(self, x: torch.Tensor, attention_mask: torch.Tensor | None = None):
+    def forward(self, x: torch.Tensor, attention_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [batch_size, seq_len, hidden_size]
+            attention_mask: [batch_size, seq_len]，1=valid（仅 CPT 模式使用）
         Returns:
             out: [batch_size, seq_len, hidden_size]
-            aux_loss: scalar tensor
+            aux_loss: scalar tensor（CPT 模式恒为 0）
         """
+        if self.is_cpt:
+            return self._forward_cpt(x, attention_mask)
+        return self._forward_linear(x)
+
+    def _forward_linear(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """主分支线性路由器路径（与 main 保持一致）。"""
+        B, S, D = x.shape
+        x_flat = x.view(-1, D)  # [B*S, D]
+        N = B * S
+
+        router_logits = self.router(x_flat)  # [N, num_experts]
+
+        if self.training and self.jitter_noise > 0:
+            router_logits = router_logits * (1 + torch.randn_like(router_logits) * self.jitter_noise)
+
+        routing_weights = F.softmax(router_logits.float(), dim=-1).to(x.dtype)
+        routing_weights_topk, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        routing_weights_topk = routing_weights_topk / routing_weights_topk.sum(dim=-1, keepdim=True)
+
+        aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        if self.training and self.aux_loss_coef > 0:
+            with torch.no_grad():
+                expert_mask = F.one_hot(selected_experts, num_classes=self.num_experts).float()
+                f_i = expert_mask.mean(dim=(0, 1))
+            P_i = routing_weights.mean(dim=0)
+            aux_loss = (f_i.detach() * P_i).sum() * self.num_experts
+
+        if self.training:
+            with torch.no_grad():
+                self.last_expert_counts = torch.bincount(
+                    selected_experts.view(-1), minlength=self.num_experts
+                )
+
+        flat_experts = selected_experts.view(-1)
+        flat_weights = routing_weights_topk.view(-1)
+        flat_token_idx = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
+
+        sorted_indices = flat_experts.argsort(stable=True)
+        sorted_token_idx = flat_token_idx[sorted_indices]
+        sorted_weights = flat_weights[sorted_indices]
+        sorted_experts = flat_experts[sorted_indices]
+
+        expert_counts = torch.bincount(sorted_experts, minlength=self.num_experts).tolist()
+
+        final_out = torch.zeros(N, D, device=x.device, dtype=x.dtype)
+        start = 0
+        for e in range(self.num_experts):
+            count = expert_counts[e]
+            if count == 0:
+                continue
+            end = start + count
+            idx = sorted_token_idx[start:end]
+            w = sorted_weights[start:end]
+            token_states = x_flat[idx]
+
+            gate = F.silu(torch.matmul(token_states, self.gate_proj[e].T))
+            up = torch.matmul(token_states, self.up_proj[e].T)
+            expert_out = torch.matmul(gate * up, self.down_proj[e].T)
+
+            final_out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
+            start = end
+
+        if self.training:
+            # 零 token 专家梯度保活：0 × Σ(all expert weights) 挂在计算图上，
+            # 保证未命中专家也收到（零）梯度，避免 DDP unused-parameter 报错、
+            # 并保持权重衰减对其一致生效。对输出数值零扰动。
+            keepalive = (self.gate_proj.sum() + self.up_proj.sum() + self.down_proj.sum()) * 0.0
+            final_out = final_out + keepalive.to(final_out.dtype)
+
+        return final_out.view(B, S, D), aux_loss
+
+    def _forward_cpt(self, x: torch.Tensor, attention_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        """CPT 概率路由器路径：padding 感知，实际分配统计供 CPT 事务收集。"""
         B, S, D = x.shape
         x_flat = x.view(-1, D)  # [B*S, D]
         N = B * S
@@ -217,8 +305,8 @@ class SparseMoE(nn.Module):
         routing_weights_topk = routing_weights_topk.to(x.dtype)
         aux_loss = torch.zeros((), device=x.device, dtype=torch.float32)
         expert_hits = torch.bincount(selected_experts.reshape(-1), minlength=self.num_experts)
-        if self.training:
-            self.last_expert_counts = expert_hits.detach().clone()
+        self.last_expert_counts = expert_hits.detach().clone()
+        self.last_token_count = torch.tensor(valid.numel(), device=x.device, dtype=torch.int64)
 
         flat_experts = selected_experts.view(-1)
         flat_weights = routing_weights_topk.view(-1)
@@ -256,9 +344,16 @@ class SparseMoE(nn.Module):
             keepalive = (self.gate_proj.sum() + self.up_proj.sum() + self.down_proj.sum()) * 0.0
             final_out = final_out + keepalive.to(final_out.dtype)
 
-        return (final_out.view(B, S, D), aux_loss, expert_hits.detach().clone(),
-                torch.tensor(valid.numel(), device=x.device, dtype=torch.int64),
-                self.cpt_router.state_version.detach().clone())
+        return final_out.view(B, S, D), aux_loss
+
+    def cpt_layer_proposal(self, layer_index: int) -> CPTLayerProposal:
+        """Snapshot this forward's actual host dispatch for the CPT transaction."""
+        return CPTLayerProposal(
+            layer_index,
+            self.last_expert_counts.detach().clone(),
+            self.last_token_count.detach().clone(),
+            self.cpt_router.state_version.detach().clone(),
+        )
 
 
 # ============================================================
@@ -268,7 +363,7 @@ class SparseMoE(nn.Module):
 class MoETransformerBlock(nn.Module):
     """一个 Transformer 层：GQA Attention + MoE FFN。"""
 
-    def __init__(self, config: TinyMixtralConfig, layer_index: int):
+    def __init__(self, config: TinyMixtralConfig, layer_index: int = 0):
         super().__init__()
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
@@ -290,10 +385,10 @@ class MoETransformerBlock(nn.Module):
         # MoE FFN
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, aux_loss, hits, count, version = self.moe(hidden_states, attention_mask)
+        hidden_states, aux_loss = self.moe(hidden_states, attention_mask)
         hidden_states = residual + hidden_states
 
-        return hidden_states, aux_loss, hits, count, version
+        return hidden_states, aux_loss
 
 
 # ============================================================
@@ -312,6 +407,7 @@ class TinyMixtralForCausalLM(CPTModelMixin, nn.Module):
     def __init__(self, config: TinyMixtralConfig):
         super().__init__()
         self.config = config
+        self.is_cpt = isinstance(config, CPTConfig)
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([
@@ -383,7 +479,8 @@ class TinyMixtralForCausalLM(CPTModelMixin, nn.Module):
             attention_mask: [batch_size, seq_len], 1=valid, 0=pad
             labels: [batch_size, seq_len], -100=masked
         Returns:
-            dict with keys: logits, loss, aux_loss
+            dict with keys: logits, loss, ce_loss, aux_loss, cpt_transaction
+            （cpt_transaction 仅 CPT 模式非 None）
         """
         B, S = input_ids.shape
         position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, -1)
@@ -400,14 +497,15 @@ class TinyMixtralForCausalLM(CPTModelMixin, nn.Module):
         proposals = []
         for i, layer in enumerate(self.layers):
             if self._use_activation_checkpointing and self.training:
-                hidden_states, aux_loss, hits, count, version = checkpoint(
+                hidden_states, aux_loss = checkpoint(
                     layer, hidden_states, causal_mask, position_ids,
                     use_reentrant=False,
                 )
             else:
-                hidden_states, aux_loss, hits, count, version = layer(hidden_states, causal_mask, position_ids)
+                hidden_states, aux_loss = layer(hidden_states, causal_mask, position_ids)
             total_aux_loss = total_aux_loss + aux_loss
-            proposals.append(CPTLayerProposal(i, hits, count, version))
+            if self.is_cpt:
+                proposals.append(layer.moe.cpt_layer_proposal(i))
 
         total_aux_loss = total_aux_loss / len(self.layers)
 
@@ -435,7 +533,10 @@ class TinyMixtralForCausalLM(CPTModelMixin, nn.Module):
             "loss": loss,
             "ce_loss": ce_loss.detach() if ce_loss is not None else None,
             "aux_loss": total_aux_loss.detach(),
-            "cpt_transaction": CPTTransaction(tuple(proposals)),
+            "cpt_transaction": (
+                CPTTransaction(tuple(proposals), training_forward=bool(self.training))
+                if self.is_cpt else None
+            ),
         }
 
     def expert_utilization(self) -> list | None:
@@ -457,16 +558,17 @@ class TinyMixtralForCausalLM(CPTModelMixin, nn.Module):
         """保存为 HuggingFace 兼容格式。"""
         import os
         os.makedirs(path, exist_ok=True)
-        self.validate_persistent_cpt_state()
+        if self.is_cpt:
+            self.validate_persistent_cpt_state()
         self.config.save_pretrained(path)
         state_dict = self.state_dict()
         torch.save(state_dict, f"{path}/pytorch_model.bin")
 
     @classmethod
     def from_pretrained(cls, path: str, config: TinyMixtralConfig | None = None) -> "TinyMixtralForCausalLM":
-        """从 HF 格式加载模型。"""
+        """从 HF 格式加载模型（按 config.json 自动选择线性/CPT 配置）。"""
         if config is None:
-            config = TinyMixtralConfig.from_json_file(f"{path}/config.json")
+            config = config_from_json_file(f"{path}/config.json")
         model = cls(config)
         state_dict = torch.load(f"{path}/pytorch_model.bin", map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict, strict=True)
