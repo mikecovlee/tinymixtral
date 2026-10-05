@@ -1,6 +1,8 @@
-> This branch contains the independent native **tinymixtral-v3.0-downdp-adaptive-codeupdate** model.
-> See [CPT_MODEL.md](CPT_MODEL.md) for its configuration, training entry point and validation.
-> The upstream documentation below describes the original models and their results.
+> This branch adds the **tinymixtral-v3.0-downdp-adaptive-codeupdate** CPT router as a
+> pure increment: linear mode (main-compatible) and CPT mode coexist, selected by the
+> config class. See [CPT_MODEL.md](CPT_MODEL.md) for details, training protocol and
+> validation. The upstream documentation below describes both router modes' backbone
+> and the original models' results.
 
 # TinyMixtral
 
