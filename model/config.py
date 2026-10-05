@@ -49,8 +49,7 @@ class TinyMixtralConfig:
         positive_fields = (
             "vocab_size", "hidden_size", "num_hidden_layers",
             "num_attention_heads", "num_key_value_heads", "head_dim",
-            "max_position_embeddings", "num_local_experts",
-            "num_experts_per_tok", "expert_intermediate_size",
+            "max_position_embeddings", "expert_intermediate_size",
         )
         for name in positive_fields:
             if getattr(self, name) <= 0:
@@ -59,7 +58,14 @@ class TinyMixtralConfig:
             raise ValueError("hidden_size must equal num_attention_heads * head_dim")
         if self.num_attention_heads % self.num_key_value_heads != 0:
             raise ValueError("num_attention_heads must be divisible by num_key_value_heads")
-        if self.num_experts_per_tok > self.num_local_experts:
+        if self.num_local_experts < 0 or self.num_experts_per_tok < 0:
+            raise ValueError("num_local_experts and num_experts_per_tok must be non-negative")
+        if self.num_local_experts == 0:
+            if self.num_experts_per_tok != 0:
+                raise ValueError(
+                    "dense mode (num_local_experts == 0) requires num_experts_per_tok == 0"
+                )
+        elif self.num_experts_per_tok > self.num_local_experts:
             raise ValueError("num_experts_per_tok cannot exceed num_local_experts")
         if self.router_aux_loss_coef < 0 or self.router_jitter_noise < 0:
             raise ValueError("router loss coefficient and jitter noise must be non-negative")

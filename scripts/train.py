@@ -13,9 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 
+from cpt_model import config_from_json_file, model_for_config
 from model.config import TinyMixtralConfig
-from model.cpt_config import config_from_json_file
-from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import (
     check_checkpoint_disk_space,
     final_save,
@@ -102,7 +101,7 @@ def main():
     # ---- 模型 ----
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    model = TinyMixtralForCausalLM(cfg)
+    model = model_for_config(cfg)
     if args.no_grad_ckpt:
         model.gradient_checkpointing_disable()
     else:

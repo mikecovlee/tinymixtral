@@ -40,7 +40,7 @@ ui = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["model*", "hf*", "scripts*"]
+include = ["model*", "cpt_model*", "hf*", "scripts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

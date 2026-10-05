@@ -4,8 +4,8 @@ from unittest.mock import patch
 import pytest
 import torch
 
+from cpt_model import CPTConfig, CPTForCausalLM, config_from_json_file, model_for_config
 from model.config import TinyMixtralConfig
-from model.cpt_config import CPTConfig, config_from_json_file
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import make_adamw
 
@@ -28,9 +28,9 @@ def tiny_linear(k=2, n=4) -> TinyMixtralConfig:
         num_local_experts=n, num_experts_per_tok=k, expert_intermediate_size=24)
 
 
-def cpt_model() -> TinyMixtralForCausalLM:
+def build_cpt() -> CPTForCausalLM:
     torch.manual_seed(11)
-    return TinyMixtralForCausalLM(tiny_cpt()).train()
+    return CPTForCausalLM(tiny_cpt()).train()
 
 
 def test_cpt_config_pins_aux_and_jitter():
@@ -41,9 +41,8 @@ def test_cpt_config_pins_aux_and_jitter():
 
 def test_linear_mode_is_default_with_live_aux():
     model = TinyMixtralForCausalLM(tiny_linear()).train()
-    assert not model.is_cpt
     out = model(TOKENS, labels=TOKENS)
-    assert out["cpt_transaction"] is None
+    assert out.get("cpt_transaction") is None
     assert out["aux_loss"].item() > 0
     assert out["loss"].item() > out["ce_loss"].item()
     keys = set(model.state_dict())
@@ -51,16 +50,13 @@ def test_linear_mode_is_default_with_live_aux():
     assert not any("cpt_router" in key for key in keys)
 
 
-def test_linear_model_rejects_cpt_api():
+def test_linear_model_has_no_cpt_api():
     model = TinyMixtralForCausalLM(tiny_linear()).train()
-    with pytest.raises(RuntimeError, match="linear Router"):
-        model.commit_cpt_transaction(None)
-    with pytest.raises(RuntimeError, match="linear Router"):
-        model.get_cpt_state_version()
-    assert model.no_weight_decay_parameters() == ()
+    assert not hasattr(model, "commit_cpt_transaction")
+    assert not hasattr(model, "no_weight_decay_parameters")
 
 
-def test_config_dispatch_selects_class(tmp_path):
+def test_dispatch_selects_model_and_config_classes(tmp_path):
     linear_dir = tmp_path / "linear"
     cpt_dir = tmp_path / "cpt"
     tiny_linear().save_pretrained(str(linear_dir))
@@ -70,10 +66,12 @@ def test_config_dispatch_selects_class(tmp_path):
     assert type(linear) is TinyMixtralConfig
     assert type(cpt) is CPTConfig
     assert cpt.cpt_num_prototypes == 2 * cpt.num_local_experts
+    assert type(model_for_config(linear)) is TinyMixtralForCausalLM
+    assert type(model_for_config(cpt)) is CPTForCausalLM
 
 
 def test_commit_rejects_eval_forward_transaction():
-    model = cpt_model()
+    model = build_cpt()
     model.eval()
     with torch.no_grad():
         out = model(TOKENS, attention_mask=MASK, labels=TOKENS)
@@ -85,7 +83,7 @@ def test_commit_rejects_eval_forward_transaction():
 
 
 def test_commit_governed_by_forward_mode_not_commit_mode():
-    model = cpt_model()
+    model = build_cpt()
     out = model(TOKENS, attention_mask=MASK, labels=TOKENS)
     model.eval()
     try:
@@ -95,7 +93,7 @@ def test_commit_governed_by_forward_mode_not_commit_mode():
 
 
 def test_commit_rejects_distributed_process_group():
-    model = cpt_model()
+    model = build_cpt()
     out = model(TOKENS, attention_mask=MASK, labels=TOKENS)
     with patch.object(torch.distributed, "is_available", return_value=True), \
             patch.object(torch.distributed, "is_initialized", return_value=True):
@@ -104,7 +102,7 @@ def test_commit_rejects_distributed_process_group():
 
 
 def test_merged_microbatch_commit_updates_price_once():
-    model = cpt_model()
+    model = build_cpt()
     router = model.layers[0].moe.cpt_router
     out_a = model(TOKENS, attention_mask=MASK, labels=TOKENS)
     out_b = model(TOKENS_B, attention_mask=MASK_B, labels=TOKENS_B)
@@ -137,7 +135,7 @@ def test_merged_microbatch_commit_updates_price_once():
 
 
 def test_merged_commit_rejects_stale_microbatch():
-    model = cpt_model()
+    model = build_cpt()
     out_a = model(TOKENS, attention_mask=MASK, labels=TOKENS)
     out_b = model(TOKENS_B, attention_mask=MASK_B, labels=TOKENS_B)
     model.commit_cpt_transaction(out_a["cpt_transaction"])
@@ -146,7 +144,7 @@ def test_merged_commit_rejects_stale_microbatch():
 
 
 def test_anchors_excluded_from_weight_decay():
-    model = cpt_model()
+    model = build_cpt()
     optimizer = make_adamw(model, lr=1e-3, weight_decay=0.1)
     decay_ids = {id(p) for p in optimizer.param_groups[0]["params"]}
     no_decay_ids = {id(p) for p in optimizer.param_groups[1]["params"]}

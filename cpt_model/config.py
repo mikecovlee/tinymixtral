@@ -15,8 +15,9 @@ import json
 from dataclasses import dataclass
 from fractions import Fraction
 
-from .config import TinyMixtralConfig
-from .cpt_constants import exact_scalar, inverse_sqrt_fp32, rational_fp32
+from model.config import TinyMixtralConfig
+
+from .constants import exact_scalar, inverse_sqrt_fp32, rational_fp32
 
 CPT_ROUTING_ARCHITECTURE_FIELDS = (
     "hidden_size",

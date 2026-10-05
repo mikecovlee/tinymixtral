@@ -5,8 +5,7 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from model.cpt_config import CPTConfig
-from model.modeling import TinyMixtralForCausalLM
+from cpt_model import CPTConfig, CPTForCausalLM
 from scripts.train_utils import make_adamw, make_cosine_schedule, save_checkpoint, training_loop
 
 
@@ -18,7 +17,7 @@ def model_and_optimizer():
         num_local_experts=4, expert_intermediate_size=24,
         cpt_state_chunk_size=2, use_qk_norm=True,
     )
-    model = TinyMixtralForCausalLM(config)
+    model = CPTForCausalLM(config)
     model.gradient_checkpointing_enable()
     optimizer = make_adamw(model, lr=1e-3, weight_decay=0.0)
     scheduler = make_cosine_schedule(optimizer, warmup_steps=0, total_steps=3)
@@ -43,7 +42,7 @@ def test_optimizer_commit_checkpoint_and_resume(tmp_path):
     assert step == model.get_cpt_optimizer_step() == model.get_cpt_state_version() == 2
     checkpoint = save_checkpoint(model, optimizer, scheduler, str(tmp_path/'run'),
                                  step, total, 0, 3, fi, ptr, 1, 4)
-    restored = TinyMixtralForCausalLM.from_pretrained(str(checkpoint))
+    restored = CPTForCausalLM.from_pretrained(str(checkpoint))
     for name, tensor in model.state_dict().items():
         torch.testing.assert_close(restored.state_dict()[name], tensor, rtol=0, atol=0)
     saved = torch.load(Path(checkpoint)/'training_state.pt', weights_only=True)

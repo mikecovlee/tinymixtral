@@ -3,9 +3,7 @@ import unittest
 
 import torch
 
-from model.cpt_config import CPTConfig
-from model.cpt_router import CPTLayerProposal, CPTRouter
-from model.modeling import TinyMixtralForCausalLM
+from cpt_model import CPTConfig, CPTForCausalLM, CPTLayerProposal, CPTRouter
 
 
 def tiny(k=2, n=4):
@@ -56,7 +54,7 @@ class AdaptiveTests(unittest.TestCase):
         tokens = torch.tensor([[1,2,3,4]])
         mask = torch.tensor([[1,1,1,0]])
         for initial_k in (2,4):
-            model = TinyMixtralForCausalLM(tiny(initial_k)).train()
+            model = CPTForCausalLM(tiny(initial_k)).train()
             model.gradient_checkpointing_enable()
             for k in (initial_k, 1, 4, 2):
                 model.layers[0].moe.top_k = k
@@ -69,7 +67,7 @@ class AdaptiveTests(unittest.TestCase):
                 self.assertTrue(torch.isfinite(model.layers[0].moe.cpt_router.projection.grad).all())
                 model.commit_cpt_transaction(out['cpt_transaction'])
                 model.zero_grad(set_to_none=True)
-            clone = TinyMixtralForCausalLM(tiny(initial_k))
+            clone = CPTForCausalLM(tiny(initial_k))
             clone.load_state_dict(model.state_dict())
             model.layers[0].moe.top_k = initial_k
             model.eval()

@@ -33,8 +33,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .cpt_config import CPT_ROUTING_ARCHITECTURE_FIELDS, CPTConfig
-from .cpt_numerics import stable_l2
+from .config import CPT_ROUTING_ARCHITECTURE_FIELDS, CPTConfig
+from .numerics import stable_l2
 
 CPT_ROUTER_ALGORITHM_VERSION = 2
 

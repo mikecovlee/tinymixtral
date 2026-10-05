@@ -6,8 +6,7 @@ from unittest.mock import patch
 import torch
 from torch.utils.checkpoint import checkpoint
 
-from model.cpt_config import CPTConfig
-from model.cpt_router import CPTRouter, CPTRouterOutput
+from cpt_model import CPTConfig, CPTRouter, CPTRouterOutput
 
 
 def router_config(hidden_size=16, chunk_size=2):

@@ -19,7 +19,7 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 
-from .cpt_router import CPT_ROUTER_ALGORITHM_VERSION, CPTLayerProposal, CPTRouter, CPTTransaction
+from .router import CPT_ROUTER_ALGORITHM_VERSION, CPTLayerProposal, CPTRouter, CPTTransaction
 
 
 class CPTModelMixin:

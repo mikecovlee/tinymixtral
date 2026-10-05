@@ -4,7 +4,7 @@ import unittest
 import torch
 from torch.fx.experimental.proxy_tensor import make_fx
 
-from model.cpt_numerics import stable_l2
+from cpt_model import stable_l2
 
 
 def reference(x, dim, eps):

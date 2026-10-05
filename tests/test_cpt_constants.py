@@ -7,8 +7,7 @@ from decimal import Decimal, localcontext
 from fractions import Fraction
 from pathlib import Path
 
-from model.cpt_config import CPTConfig
-from model.cpt_constants import exact_scalar, inverse_sqrt_fp32, rational_fp32
+from cpt_model import CPTConfig, exact_scalar, inverse_sqrt_fp32, rational_fp32
 
 
 def bits(value):
