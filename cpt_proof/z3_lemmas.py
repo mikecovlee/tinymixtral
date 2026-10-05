@@ -12,7 +12,7 @@ reduction whose only analytic ingredient is Cauchy-Schwarz, and closed 2D/3D
 instances where nothing is assumed.  The general n-dimensional case is the
 triangle inequality.
 
-Run:  python proofs/z3_lemmas.py
+Run:  python cpt_proof/z3_lemmas.py
 """
 
 from z3 import And, Not, Real, RealVal, Solver, sat, unsat

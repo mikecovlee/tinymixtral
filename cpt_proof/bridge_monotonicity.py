@@ -3,13 +3,13 @@
 
 """Exhaustive bridge lemma for the rounding search proof (L7 reduction).
 
-``proofs/z3_binary_search.py`` reasons about ``_round_positive`` through a
+``cpt_proof/z3_binary_search.py`` reasons about ``_round_positive`` through a
 target bit pattern ``t``; that reduction needs ``_positive_value`` to be
 strictly monotone and to agree with the IEEE-754 binary32 view.  This script
 checks both **exhaustively over all 2^31 finite nonnegative bit patterns**
 -- a complete finite check, not a sample.
 
-Run:  python proofs/bridge_monotonicity.py
+Run:  python cpt_proof/bridge_monotonicity.py
 """
 
 import sys

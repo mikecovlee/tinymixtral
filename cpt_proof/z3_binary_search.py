@@ -20,7 +20,7 @@ such that every oracle call ``compare(value(m)) <= 0`` reduces to the integer
 test ``m <= t``, and the final midpoint test reduces to ``-flag``.  The search
 then depends only on ``(t, flag)``.
 
-Run:  python proofs/z3_binary_search.py
+Run:  python cpt_proof/z3_binary_search.py
 """
 
 from z3 import (

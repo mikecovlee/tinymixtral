@@ -7,10 +7,10 @@ Python 3.13；采样脚本固定随机种子，逐次运行可复现。
 
 ```sh
 pip install z3-solver gmpy2 numpy     # 依赖
-python proofs/z3_binary_search.py     # L7: FP32 舍入搜索的机器证明
-python proofs/z3_lemmas.py            # L2-L5, L8: 代数引理的 SMT 判定
-python proofs/bridge_monotonicity.py  # L7 归约桥引理（全 2^31 模式穷举）
-python proofs/mpfr_rounding_check.py  # L7/L8: 实现 vs MPFR/精确算术对拍
+python cpt_proof/z3_binary_search.py     # L7: FP32 舍入搜索的机器证明
+python cpt_proof/z3_lemmas.py            # L2-L5, L8: 代数引理的 SMT 判定
+python cpt_proof/bridge_monotonicity.py  # L7 归约桥引理（全 2^31 模式穷举）
+python cpt_proof/mpfr_rounding_check.py  # L7/L8: 实现 vs MPFR/精确算术对拍
 ```
 
 ## 证明结论账本

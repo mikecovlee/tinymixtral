@@ -18,7 +18,7 @@ Covered: every exponent-class boundary and its exact midpoint (ties-to-even),
 random adjacent pairs in all finite classes, subnormal values, the overflow
 boundary, and random rationals across the whole FP32 range.
 
-Run:  python proofs/mpfr_rounding_check.py [random_cases]
+Run:  python cpt_proof/mpfr_rounding_check.py [random_cases]
 """
 
 import random
