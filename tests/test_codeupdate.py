@@ -6,12 +6,12 @@ from unittest.mock import patch
 import torch
 from torch.utils.checkpoint import checkpoint
 
-from model.config import TinyMixtralConfig
+from model.cpt_config import CPTConfig
 from model.cpt_router import CPTRouter, CPTRouterOutput
 
 
 def router_config(hidden_size=16, chunk_size=2):
-    return TinyMixtralConfig(
+    return CPTConfig(
         hidden_size=hidden_size,
         num_hidden_layers=1,
         num_attention_heads=2,

@@ -5,14 +5,14 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from model.config import TinyMixtralConfig
+from model.cpt_config import CPTConfig
 from model.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import make_adamw, make_cosine_schedule, save_checkpoint, training_loop
 
 
 def model_and_optimizer():
     torch.manual_seed(7)
-    config = TinyMixtralConfig(
+    config = CPTConfig(
         vocab_size=32, hidden_size=16, num_hidden_layers=1,
         num_attention_heads=2, num_key_value_heads=1, head_dim=8,
         num_local_experts=4, expert_intermediate_size=24,

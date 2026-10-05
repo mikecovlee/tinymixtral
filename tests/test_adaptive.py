@@ -3,13 +3,13 @@ import unittest
 
 import torch
 
-from model.config import TinyMixtralConfig
+from model.cpt_config import CPTConfig
 from model.cpt_router import CPTLayerProposal, CPTRouter
 from model.modeling import TinyMixtralForCausalLM
 
 
 def tiny(k=2, n=4):
-    return TinyMixtralConfig(vocab_size=32, hidden_size=16, num_hidden_layers=1,
+    return CPTConfig(vocab_size=32, hidden_size=16, num_hidden_layers=1,
         num_attention_heads=2, num_key_value_heads=1, head_dim=8,
         num_local_experts=n, num_experts_per_tok=k, expert_intermediate_size=24,
         cpt_state_chunk_size=2)
@@ -21,13 +21,13 @@ class AdaptiveTests(unittest.TestCase):
             cfg = tiny(n=n)
             self.assertEqual(cfg.cpt_projection_dim, 2*n-1)
             self.assertAlmostEqual(cfg.cpt_prototype_temperature, 1/math.sqrt(2*n-1), places=7)
-            self.assertEqual(TinyMixtralConfig.from_dict(cfg.to_dict()).to_dict(), cfg.to_dict())
+            self.assertEqual(CPTConfig.from_dict(cfg.to_dict()).to_dict(), cfg.to_dict())
             router = CPTRouter(cfg, 0)
             self.assertEqual(tuple(router.projection.shape), (2*n-1, 16))
         for kwargs in ({'cpt_projection_dim': 16}, {'cpt_prototype_temperature': 0.25},
                        {'num_experts_per_tok': True}, {'num_experts_per_tok': 7}):
             with self.assertRaises(ValueError):
-                TinyMixtralConfig(**kwargs)
+                CPTConfig(**kwargs)
 
     def test_actual_assignment_price(self):
         router = CPTRouter(tiny(), 0)
