@@ -1,8 +1,10 @@
 import math
 import unittest
+
 import torch
+
 from model.config import TinyMixtralConfig
-from model.cpt_router import CPTRouter, CPTLayerProposal, CPTTransaction
+from model.cpt_router import CPTLayerProposal, CPTRouter
 from model.modeling import TinyMixtralForCausalLM
 
 
@@ -70,7 +72,8 @@ class AdaptiveTests(unittest.TestCase):
             clone = TinyMixtralForCausalLM(tiny(initial_k))
             clone.load_state_dict(model.state_dict())
             model.layers[0].moe.top_k = initial_k
-            model.eval(); clone.eval()
+            model.eval()
+            clone.eval()
             with torch.no_grad():
                 torch.testing.assert_close(model(tokens)['logits'], clone(tokens)['logits'], rtol=0, atol=0)
 

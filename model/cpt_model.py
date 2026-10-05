@@ -1,18 +1,19 @@
-from typing import Optional, Tuple
+
 import torch
 from torch import nn
-from .cpt_router import CPT_ROUTER_ALGORITHM_VERSION, CPTTransaction, CPTRouter
+
+from .cpt_router import CPT_ROUTER_ALGORITHM_VERSION, CPTRouter, CPTTransaction
 
 
 class CPTModelMixin:
-    def _cpt_routers(self) -> Tuple[CPTRouter, ...]:
+    def _cpt_routers(self) -> tuple[CPTRouter, ...]:
         return tuple(layer.moe.cpt_router for layer in self.layers)
 
-    def cpt_trainable_parameters(self) -> Tuple[nn.Parameter, ...]:
+    def cpt_trainable_parameters(self) -> tuple[nn.Parameter, ...]:
         return tuple(parameter for router in self._cpt_routers() for parameter in router.trainable_parameters())
 
     def _validate_cpt_config_binding(self) -> None:
-        for layer_index, (layer, router) in enumerate(zip(self.layers, self._cpt_routers())):
+        for layer_index, (layer, router) in enumerate(zip(self.layers, self._cpt_routers(), strict=False)):
             router.validate_config_binding(self.config)
             if (
                 type(layer.moe.top_k) is not int
@@ -69,7 +70,7 @@ class CPTModelMixin:
             raise RuntimeError("CPT transaction does not cover every MoE layer")
         self.get_cpt_state_version()
         token_counts: list[int] = []
-        for router, proposal in zip(routers, transaction.proposals):
+        for router, proposal in zip(routers, transaction.proposals, strict=False):
             router.validate_proposal(proposal)
             token_counts.append(int(proposal.token_count.item()))
         if token_counts and len(set(token_counts)) != 1:
@@ -80,7 +81,7 @@ class CPTModelMixin:
         self,
         transaction: CPTTransaction,
         *,
-        optimizer_step: Optional[int] = None,
+        optimizer_step: int | None = None,
     ) -> int:
         """Commit all Router prices/anchors/versions, or none of them."""
         if bool(getattr(self, "_tinymixtral_fail_stop", False)):
@@ -110,16 +111,16 @@ class CPTModelMixin:
                 proposal,
                 optimizer_step=optimizer_step,
             )
-            for router, proposal in zip(routers, transaction.proposals)
+            for router, proposal in zip(routers, transaction.proposals, strict=False)
         ]
         snapshots = [router.commit_snapshot() for router in routers]
         try:
-            for router, candidate in zip(routers, prepared):
+            for router, candidate in zip(routers, prepared, strict=False):
                 router.apply_commit(*candidate)
             self.validate_persistent_cpt_state()
         except BaseException:
             recovery_errors = []
-            for router, snapshot in zip(routers, snapshots):
+            for router, snapshot in zip(routers, snapshots, strict=False):
                 try:
                     router.restore_commit_snapshot(snapshot)
                 except BaseException as error:
@@ -132,7 +133,7 @@ class CPTModelMixin:
         return self.get_cpt_state_version()
 
     @staticmethod
-    def abort_cpt_transaction(transaction: Optional[CPTTransaction]) -> None:
+    def abort_cpt_transaction(transaction: CPTTransaction | None) -> None:
         if transaction is None:
             return
         if not isinstance(transaction, CPTTransaction):

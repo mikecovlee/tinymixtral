@@ -1,10 +1,10 @@
 """Exact source expressions, one-step binary32 rounding and config persistence."""
-from decimal import Decimal, localcontext
-from fractions import Fraction
 import json
 import struct
 import tempfile
 import unittest
+from decimal import Decimal, localcontext
+from fractions import Fraction
 from pathlib import Path
 
 from model.config import TinyMixtralConfig

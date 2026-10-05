@@ -16,8 +16,8 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import TinyMixtralConfig
-from .cpt_router import CPTRouter, CPTLayerProposal, CPTTransaction
 from .cpt_model import CPTModelMixin
+from .cpt_router import CPTLayerProposal, CPTRouter, CPTTransaction
 
 # ============================================================
 # RMSNorm

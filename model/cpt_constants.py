@@ -3,10 +3,10 @@
 Only initialization uses rational arithmetic. Runtime tensors remain FP32.
 No eval, decimal approximation of radicals, or binary64 double rounding is used.
 """
+import struct
+from collections.abc import Callable
 from fractions import Fraction
 from numbers import Real
-import struct
-from typing import Callable
 
 
 def exact_scalar(name: str, value: object) -> Fraction:

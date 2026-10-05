@@ -6,9 +6,8 @@
 import math
 import struct
 from dataclasses import dataclass
-from numbers import Real
-from typing import Optional
 from fractions import Fraction
+from numbers import Real
 
 from .cpt_constants import exact_scalar, inverse_sqrt_fp32, rational_fp32
 
@@ -58,8 +57,8 @@ class TinyMixtralConfig:
 
     # CPT-MoE probability Router (P x -> stable L2 -> B^T q)
     cpt_router_version: int = 2
-    cpt_num_prototypes: Optional[int] = None  # derived as K = 2N
-    cpt_projection_dim: Optional[int] = None  # derived as K - 1
+    cpt_num_prototypes: int | None = None  # derived as K = 2N
+    cpt_projection_dim: int | None = None  # derived as K - 1
     cpt_rho_beta: float | str = "19/20"
     cpt_beta_max: float | str = "9/20"
     cpt_kappa_beta: float | str | None = None

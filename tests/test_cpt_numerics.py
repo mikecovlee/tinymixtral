@@ -1,7 +1,9 @@
 """Numerical contract tests for the exact clamped-L2 mapping used by CPT."""
 import unittest
+
 import torch
 from torch.fx.experimental.proxy_tensor import make_fx
+
 from model.cpt_numerics import stable_l2
 
 
@@ -38,7 +40,8 @@ class StableL2Tests(unittest.TestCase):
         torch.manual_seed(11)
         for scale in (0.0, 0.01, 1.0):
             x = (torch.randn(2, 7, dtype=torch.double) * scale).requires_grad_()
-            f = lambda value: stable_l2(value, -1, 0.125)
+            def f(value):
+                return stable_l2(value, -1, 0.125)
             self.assertTrue(torch.autograd.gradcheck(f, (x,)))
             self.assertTrue(torch.autograd.gradgradcheck(f, (x,)))
 
@@ -54,7 +57,8 @@ class StableL2Tests(unittest.TestCase):
     def test_zero_vector_backward_has_no_nonfinite_intermediates(self):
         x = torch.zeros(2, 7, requires_grad=True)
         g = torch.ones_like(x)
-        backward = lambda value, incoming: torch.autograd.grad(stable_l2(value, -1, 1e-6), value, incoming)[0]
+        def backward(value, incoming):
+            return torch.autograd.grad(stable_l2(value, -1, 1e-6), value, incoming)[0]
         graph = make_fx(backward)(x, g)
         actual = FiniteInterpreter(graph).run(x, g)
         torch.testing.assert_close(actual, g / 1e-6, rtol=0, atol=0)
