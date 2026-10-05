@@ -51,6 +51,9 @@ def main():
                    help="优化器状态使用 bf16 存储 (节省约 50%% 优化器显存)")
     p.add_argument("--chunked-ce", action="store_true",
                    help="分块计算 CE（不物化全量 fp32 logits，省约 2-3GB 显存）")
+    p.add_argument("--no-grad-ckpt", action="store_true",
+                   help="关闭 activation checkpointing（省重算，提速 ~1.3-1.5x，"
+                        "但激活显存显著上升；数学上与开启完全等价）")
     p.add_argument("--seed", type=int, default=42,
                    help="随机种子（模型初始化与路由噪声）")
     p.add_argument("--val-dir", default=None,
@@ -99,7 +102,10 @@ def main():
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     model = TinyMixtralForCausalLM(cfg)
-    model.gradient_checkpointing_enable()
+    if args.no_grad_ckpt:
+        model.gradient_checkpointing_disable()
+    else:
+        model.gradient_checkpointing_enable()
     model.use_chunked_ce = args.chunked_ce
     model = model.to("cuda").to(torch.bfloat16)
     nM = sum(p.numel() for p in model.parameters()) / 1e6
@@ -108,7 +114,7 @@ def main():
           f"GQA{cfg.num_attention_heads}h/{cfg.num_key_value_heads}kv {nM:.0f}M params "
           f"qk_norm={cfg.use_qk_norm} aux={cfg.router_aux_loss_coef} "
           f"jitter={cfg.router_jitter_noise} seed={args.seed} "
-          f"chunked_ce={args.chunked_ce}", flush=True)
+          f"chunked_ce={args.chunked_ce} grad_ckpt={not args.no_grad_ckpt}", flush=True)
     check_checkpoint_disk_space(model, args.output_dir, args.keep_last_checkpoints)
 
     # ---- 优化器 + schedule ----

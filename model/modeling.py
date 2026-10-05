@@ -269,6 +269,40 @@ class SparseMoE(nn.Module):
         return final_out.view(B, S, D), aux_loss
 
 
+class DenseFFN(nn.Module):
+    """Router-free SwiGLU FFN（dense 模式：num_local_experts == 0）。
+
+    intermediate 取 config.expert_intermediate_size；
+    返回 (out, aux_loss) 以兼容 MoETransformerBlock 接口，aux_loss 恒为 0。
+    """
+
+    def __init__(self, config: TinyMixtralConfig):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.intermediate = config.expert_intermediate_size
+        self.last_expert_counts: torch.Tensor | None = None
+
+        self.gate_proj = nn.Parameter(torch.empty(self.intermediate, self.hidden_size))
+        self.up_proj = nn.Parameter(torch.empty(self.intermediate, self.hidden_size))
+        self.down_proj = nn.Parameter(torch.empty(self.hidden_size, self.intermediate))
+
+        self._init_weights()
+
+    def _init_weights(self, initializer_range=0.02):
+        nn.init.normal_(self.gate_proj, std=initializer_range)
+        nn.init.normal_(self.up_proj, std=initializer_range)
+        nn.init.normal_(self.down_proj, std=initializer_range)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        B, S, D = x.shape
+        x_flat = x.view(-1, D)
+        gate = F.silu(torch.matmul(x_flat, self.gate_proj.T))
+        up = torch.matmul(x_flat, self.up_proj.T)
+        out = torch.matmul(gate * up, self.down_proj.T)
+        aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        return out.view(B, S, D), aux_loss
+
+
 # ============================================================
 # Transformer Block
 # ============================================================
@@ -281,7 +315,7 @@ class MoETransformerBlock(nn.Module):
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.self_attn = GQAAttention(config)
-        self.moe = SparseMoE(config)
+        self.moe = DenseFFN(config) if config.num_local_experts == 0 else SparseMoE(config)
 
     def forward(
         self,
