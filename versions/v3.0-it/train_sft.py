@@ -25,7 +25,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from model.modeling import TinyMixtralForCausalLM  # noqa: E402
+from model import from_pretrained  # noqa: E402
 from scripts.train_utils import (
     make_adamw,
     make_cosine_schedule,
@@ -150,7 +150,7 @@ def main():
 
     src = args.resume or args.checkpoint
     print(f"Loading model from {src}...", flush=True)
-    model = TinyMixtralForCausalLM.from_pretrained(src)
+    model = from_pretrained(src)
     model = model.to(device).train()
     model.gradient_checkpointing_enable()
     n_total = sum(p.numel() for p in model.parameters())

@@ -21,7 +21,7 @@ Same trunk architecture as v1.1 (the data-quality ablation changed only the data
 [`configs/config.json`](configs/config.json).
 
 ```bash
-python scripts/train.py --config versions/v1.0/configs/config.json \
+python scripts/train.py --config config/v1.0/config.json \
   --cache-dir data/c4/tokenized \
   --batch-size 22 --max-tokens 4000000000 --lr 3e-4 --warmup-steps 2000 \
   --keep-last-checkpoints 5 2>&1 | tee train.log

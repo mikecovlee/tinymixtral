@@ -37,7 +37,7 @@ Data: FineWeb-Edu ([`HuggingFaceFW/fineweb-edu`](https://huggingface.co/datasets
 pre-tokenized to 100M-token `.pt` shards.
 
 ```bash
-python scripts/train.py --config versions/v1.1-1b/configs/v1b_moe.json \
+python scripts/train.py --config config/v1.1-1b/v1b_moe.json \
   --cache-dir data/pretrain/smollm_blend \
   --batch-size 16 --max-tokens 4000000000 --lr 7e-4 --warmup-steps 2000
 ```

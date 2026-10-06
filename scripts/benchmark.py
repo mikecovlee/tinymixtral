@@ -18,8 +18,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
+from model import build_model, load_config
 from scripts.train_utils import make_adamw
 
 
@@ -61,13 +60,13 @@ def test_config(hs, nl, ne, bs, sl, steps=5):
         n_kv = 2
 
     try:
-        config = TinyMixtralConfig(
-            hidden_size=hs, num_hidden_layers=nl,
-            num_attention_heads=n_heads, num_key_value_heads=n_kv, head_dim=64,
-            num_local_experts=ne, num_experts_per_tok=min(2, ne),
-            expert_intermediate_size=int(hs * 8//3), max_position_embeddings=sl, vocab_size=32000,
-        )
-        model = TinyMixtralForCausalLM(config)
+        config = load_config({
+            "hidden_size": hs, "num_hidden_layers": nl,
+            "num_attention_heads": n_heads, "num_key_value_heads": n_kv, "head_dim": 64,
+            "num_local_experts": ne, "num_experts_per_tok": min(2, ne),
+            "expert_intermediate_size": int(hs * 8//3), "max_position_embeddings": sl, "vocab_size": 32000,
+        })
+        model = build_model(config)
         model.gradient_checkpointing_enable()
         model = model.to("cuda").to(torch.bfloat16)
         nM = sum(p.numel() for p in model.parameters()) / 1e6

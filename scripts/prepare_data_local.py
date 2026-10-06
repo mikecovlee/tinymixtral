@@ -99,8 +99,8 @@ def main():
                    help="可选：从 JSON 文件读取每文件 token 计数，跳过 Phase 1")
     args = p.parse_args()
 
-    from model.config import TinyMixtralConfig
-    expect_vocab = TinyMixtralConfig().vocab_size
+    from model import default_config
+    expect_vocab = default_config().vocab_size
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

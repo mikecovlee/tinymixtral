@@ -1,7 +1,7 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 
-"""TinyMixtral——小型 Mixtral 风格 MoE 因果语言模型。
+"""TinyMistral——小型 Mixtral 风格 MoE 因果语言模型。
 
 架构：
 - decoder-only, RMSNorm, RoPE, GQA
@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from .config import TinyMixtralConfig
+from .config import TinyMistralConfig
 
 # ============================================================
 # RMSNorm
@@ -76,7 +76,7 @@ class RotaryEmbedding(nn.Module):
 class GQAAttention(nn.Module):
     """Grouped Query Attention with RoPE and FlashAttention (sdpa)."""
 
-    def __init__(self, config: TinyMixtralConfig):
+    def __init__(self, config: TinyMistralConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
@@ -156,119 +156,6 @@ class GQAAttention(nn.Module):
 # MoE FFN
 # ============================================================
 
-class SparseMoE(nn.Module):
-    """Mixtral-style Sparse Mixture of Experts FFN。
-
-    每个 token 通过 top-k gating 路由到 k 个 expert。
-    Expert 使用 SwiGLU 激活。
-    """
-
-    def __init__(self, config: TinyMixtralConfig):
-        super().__init__()
-        self.hidden_size = config.hidden_size
-        self.num_experts = config.num_local_experts
-        self.top_k = config.num_experts_per_tok
-        self.expert_intermediate = config.expert_intermediate_size
-        self.jitter_noise = config.router_jitter_noise
-        self.aux_loss_coef = config.router_aux_loss_coef
-        self.last_expert_counts: torch.Tensor | None = None
-
-        # Router
-        self.router = nn.Linear(self.hidden_size, self.num_experts, bias=False)
-
-        # Expert 参数：每个 expert 有 gate_proj, up_proj, down_proj
-        # 使用 3D 权重 [num_experts, intermediate, hidden] 方便实现
-        self.gate_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.expert_intermediate, self.hidden_size)
-        )
-        self.up_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.expert_intermediate, self.hidden_size)
-        )
-        self.down_proj = nn.Parameter(
-            torch.empty(self.num_experts, self.hidden_size, self.expert_intermediate)
-        )
-
-        self._init_weights()
-
-    def _init_weights(self, initializer_range=0.02):
-        nn.init.normal_(self.gate_proj, std=initializer_range)
-        nn.init.normal_(self.up_proj, std=initializer_range)
-        nn.init.normal_(self.down_proj, std=initializer_range)
-
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            x: [batch_size, seq_len, hidden_size]
-        Returns:
-            out: [batch_size, seq_len, hidden_size]
-            aux_loss: scalar tensor
-        """
-        B, S, D = x.shape
-        x_flat = x.view(-1, D)  # [B*S, D]
-        N = B * S
-
-        router_logits = self.router(x_flat)  # [N, num_experts]
-
-        if self.training and self.jitter_noise > 0:
-            router_logits = router_logits * (1 + torch.randn_like(router_logits) * self.jitter_noise)
-
-        routing_weights = F.softmax(router_logits.float(), dim=-1).to(x.dtype)
-        routing_weights_topk, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        routing_weights_topk = routing_weights_topk / routing_weights_topk.sum(dim=-1, keepdim=True)
-
-        aux_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
-        if self.training and self.aux_loss_coef > 0:
-            with torch.no_grad():
-                expert_mask = F.one_hot(selected_experts, num_classes=self.num_experts).float()
-                f_i = expert_mask.mean(dim=(0, 1))
-            P_i = routing_weights.mean(dim=0)
-            aux_loss = (f_i.detach() * P_i).sum() * self.num_experts
-
-        if self.training:
-            with torch.no_grad():
-                self.last_expert_counts = torch.bincount(
-                    selected_experts.view(-1), minlength=self.num_experts
-                )
-
-        flat_experts = selected_experts.view(-1)
-        flat_weights = routing_weights_topk.view(-1)
-        flat_token_idx = torch.arange(N, device=x.device).unsqueeze(1).expand(-1, self.top_k).reshape(-1)
-
-        sorted_indices = flat_experts.argsort(stable=True)
-        sorted_token_idx = flat_token_idx[sorted_indices]
-        sorted_weights = flat_weights[sorted_indices]
-        sorted_experts = flat_experts[sorted_indices]
-
-        expert_counts = torch.bincount(sorted_experts, minlength=self.num_experts).tolist()
-
-        final_out = torch.zeros(N, D, device=x.device, dtype=x.dtype)
-        start = 0
-        for e in range(self.num_experts):
-            count = expert_counts[e]
-            if count == 0:
-                continue
-            end = start + count
-            idx = sorted_token_idx[start:end]
-            w = sorted_weights[start:end]
-            token_states = x_flat[idx]
-
-            gate = F.silu(torch.matmul(token_states, self.gate_proj[e].T))
-            up = torch.matmul(token_states, self.up_proj[e].T)
-            expert_out = torch.matmul(gate * up, self.down_proj[e].T)
-
-            final_out.index_add_(0, idx, (expert_out * w.unsqueeze(-1)).to(x.dtype))
-            start = end
-
-        if self.training:
-            # 零 token 专家梯度保活：0 × Σ(all expert weights) 挂在计算图上，
-            # 保证未命中专家也收到（零）梯度，避免 DDP unused-parameter 报错、
-            # 并保持权重衰减对其一致生效。对输出数值零扰动。
-            keepalive = (self.gate_proj.sum() + self.up_proj.sum() + self.down_proj.sum()) * 0.0
-            final_out = final_out + keepalive.to(final_out.dtype)
-
-        return final_out.view(B, S, D), aux_loss
-
-
 class DenseFFN(nn.Module):
     """Router-free SwiGLU FFN（dense 模式：num_local_experts == 0）。
 
@@ -276,7 +163,7 @@ class DenseFFN(nn.Module):
     返回 (out, aux_loss) 以兼容 MoETransformerBlock 接口，aux_loss 恒为 0。
     """
 
-    def __init__(self, config: TinyMixtralConfig):
+    def __init__(self, config: TinyMistralConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.intermediate = config.expert_intermediate_size
@@ -310,12 +197,12 @@ class DenseFFN(nn.Module):
 class MoETransformerBlock(nn.Module):
     """一个 Transformer 层：GQA Attention + MoE FFN。"""
 
-    def __init__(self, config: TinyMixtralConfig):
+    def __init__(self, config: TinyMistralConfig):
         super().__init__()
         self.input_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.self_attn = GQAAttention(config)
-        self.moe = DenseFFN(config) if config.num_local_experts == 0 else SparseMoE(config)
+        self.moe = DenseFFN(config)
 
     def forward(
         self,
@@ -339,11 +226,11 @@ class MoETransformerBlock(nn.Module):
 
 
 # ============================================================
-# TinyMixtralForCausalLM
+# TinyMistralForCausalLM
 # ============================================================
 
-class TinyMixtralForCausalLM(nn.Module):
-    """TinyMixtral 因果语言模型。
+class TinyMistralForCausalLM(nn.Module):
+    """TinyMistral 因果语言模型。
 
     支持：
     - activation checkpointing（省显存）
@@ -351,7 +238,7 @@ class TinyMixtralForCausalLM(nn.Module):
     - 与 HuggingFace transformers 兼容的 save/load 接口
     """
 
-    def __init__(self, config: TinyMixtralConfig):
+    def __init__(self, config: TinyMistralConfig):
         super().__init__()
         self.config = config
 
@@ -501,10 +388,10 @@ class TinyMixtralForCausalLM(nn.Module):
         torch.save(state_dict, f"{path}/pytorch_model.bin")
 
     @classmethod
-    def from_pretrained(cls, path: str, config: TinyMixtralConfig | None = None) -> "TinyMixtralForCausalLM":
+    def from_pretrained(cls, path: str, config: TinyMistralConfig | None = None) -> "TinyMistralForCausalLM":
         """从 HF 格式加载模型。"""
         if config is None:
-            config = TinyMixtralConfig.from_json_file(f"{path}/config.json")
+            config = TinyMistralConfig.from_json_file(f"{path}/config.json")
         model = cls(config)
         state_dict = torch.load(f"{path}/pytorch_model.bin", map_location="cpu", weights_only=True)
         model.load_state_dict(state_dict, strict=True)

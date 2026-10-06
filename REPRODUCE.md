@@ -74,7 +74,7 @@ License notes for every source: [`docs/DATA_LICENSES.md`](docs/DATA_LICENSES.md)
 ## 3. Train
 
 ```bash
-python scripts/train.py --config versions/<ver>/configs/<config>.json \
+python scripts/train.py --config config/<ver>/<config>.json \
   --cache-dir data/pretrain/<blend> \
   --batch-size <bs> --max-tokens <n> --lr <lr> --warmup-steps <w>
 ```
@@ -84,7 +84,7 @@ python scripts/train.py --config versions/<ver>/configs/<config>.json \
 - Resume / continue from a checkpoint with `scripts/resume.py` (the architecture is read from the
   checkpoint's saved `config.json`).
 - v3.0 additionally ships its 4-segment launcher `versions/v3.0/scripts/run_segment.ps1`.
-- v2.0-beta uses the frozen [`shared_expert/`](shared_expert/) stack (self-contained snapshot).
+- v2.0-beta uses the `model/shared_topk/` package (the config dispatcher routes to it automatically).
 
 ## 4. Publish + evaluate
 

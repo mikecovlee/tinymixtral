@@ -20,7 +20,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
+from model import default_config
 
 
 def main():
@@ -79,7 +79,7 @@ def main():
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, legacy=False)
-        expected_vocab_size = TinyMixtralConfig().vocab_size
+        expected_vocab_size = default_config().vocab_size
         if len(tokenizer) != expected_vocab_size:
             raise ValueError(
                 f"Tokenizer vocab size is {len(tokenizer)}, expected {expected_vocab_size}"

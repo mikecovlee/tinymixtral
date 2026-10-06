@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.config import TinyMixtralConfig
+from model import default_config
 
 
 def train_sentencepiece(train_files, output_dir, vocab_size=32000, model_prefix="tokenizer"):
@@ -89,7 +89,7 @@ def main():
     parser.add_argument("--output", type=str, default="tokenizer/", help="Output directory")
     parser.add_argument("--vocab-size", type=int, default=32000, help="Vocabulary size")
     args = parser.parse_args()
-    expected_vocab_size = TinyMixtralConfig().vocab_size
+    expected_vocab_size = default_config().vocab_size
     if args.vocab_size != expected_vocab_size:
         parser.error(f"vocab-size must match model config ({expected_vocab_size})")
 

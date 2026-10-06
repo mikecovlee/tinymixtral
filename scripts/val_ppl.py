@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 
-from model.modeling import TinyMixtralForCausalLM
+from model import from_pretrained
 from scripts.train_utils import make_val_evaluator
 
 
@@ -36,7 +36,7 @@ def main():
     if not val_files:
         sys.exit(f"ERROR: no val_*.pt in {args.val_dir}")
 
-    model = TinyMixtralForCausalLM.from_pretrained(args.checkpoint)
+    model = from_pretrained(args.checkpoint)
     model = model.to(args.device).to(torch.bfloat16)
     model.eval()
     eval_fn = make_val_evaluator(val_files, args.batch_size, args.seq_len,

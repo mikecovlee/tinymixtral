@@ -173,16 +173,21 @@ reproduction: `versions/v3.0-it/REPRODUCE.md`. (*prior-arm reference)
 ```
 tinymixtral/
 ├── REPRODUCE.md    # end-to-end reproduction guide (all versions)
-├── model/          # training model code (config.py, modeling.py)
-├── hf/             # HuggingFace compatibility layer (PreTrainedModel / PretrainedConfig)
-├── shared_expert/  # v2.0 shared-expert ablation (model + scripts)
-├── versions/       # per-version bundles: card + config + version-specific scripts
-│   ├── v3.0/       # README.md, configs/, scripts/ (run_segment.ps1, run_pilot.ps1, analyze_pilot.py)
-│   ├── v3.0-it/    # instruction-tuned release: REPORT/REPRODUCE, train_sft.py, run_sft.sh, eval/, judge/, data/, configs/, eval_prompts/
-│   ├── v1.1-1b/    # README.md, configs/v1b_moe.json
-│   ├── v2.0-beta/  # README.md
-│   ├── v1.1/       # README.md
-│   └── v1.0/       # README.md
+├── model/          # mechanism packages (independent code + own HF mirrors)
+│   ├── __init__.py     # dispatcher: peek_mechanism / load_config / build_model / from_pretrained
+│   ├── topk/           # MoE top-k routing (v1.x, v3.0): config.py + modeling.py + hf/
+│   ├── shared_topk/    # shared + routed experts (v2.0-beta): own config/modeling/hf
+│   └── dense/          # dense FFN (v3.0-dense-*): TinyMistral* naming, hf/ tinymistral files
+├── config/         # per-experiment-version JSONs (iteration order)
+│   ├── v1.0/  v1.1/  v1.1-1b/  v2.0-beta/
+│   └── v3.0/  v3.0-dense-276m/  v3.0-dense-477m/  v3.0-it/
+├── data/           # reproduction recipes only (data itself lives off-repo)
+│   ├── v1/         # C4-en 4B pretrain + 1B post-train (v1.0)
+│   ├── v2/         # smollm_blend + knowledge_blend (v1.1 / v1.1-1b / v2.0-beta)
+│   └── v3/         # main_s1..s4 6-source blend + sft/ (v3.0 / v3.0-it / dense)
+├── versions/       # per-version release cards (README / REPORT / REPRODUCE only)
+│   ├── v3.0/  v3.0-it/  v3.0-dense-276m/  v3.0-dense-477m/
+│   └── v2.0-beta/  v1.1-1b/  v1.1/  v1.0/
 ├── scripts/        # shared tooling: train/resume/prepare_data(+_local)/download_{parquets,jsonl_zst}/mix_data/make_blend_shards/publish_hf/chat/val_ppl/…
 ├── configs/        # hardware profile + shared config dirs
 ├── evals/          # legacy eval outputs (run-local lm-eval results)
@@ -191,6 +196,23 @@ tinymixtral/
 ├── requirements.txt
 └── LICENSE
 ```
+
+Model structure × data generation — any combination works
+(`scripts/train.py --config config/<ver>/<x>.json --cache-dir data/<gen>/`):
+
+| Version | Structure | Mechanism package | Data | Config |
+|---|---|---|---|---|
+| v1.0 | 6-expert top-2 MoE (896 / 10 layers) | `model/topk` | v1 | `config/v1.0/` |
+| v1.1 | same structure as v1.0 (data ablation) | `model/topk` | v2 | `config/v1.1/` |
+| v1.1-1b | 8-expert top-2 MoE (1024 / 16) | `model/topk` | v2 | `config/v1.1-1b/` |
+| v2.0-beta | 1 shared + 6 routed experts | `model/shared_topk` | v2 | `config/v2.0-beta/` |
+| v3.0 | 4-expert top-2 MoE (1024 / 16) | `model/topk` | v3 | `config/v3.0/` |
+| v3.0-dense-276m | dense FFN, iso-active 276M | `model/dense` | v3 | `config/v3.0-dense-276m/` |
+| v3.0-dense-477m | dense FFN, iso-total 477M | `model/dense` | v3 | `config/v3.0-dense-477m/` |
+| v3.0-it | v3.0 structure, instruction-tuned | `model/topk` | v3 + SFT | `config/v3.0-it/` |
+
+Naming: MoE family = tinymixtral, dense family = tinymistral. Data generations:
+v1 = C4-en era, v2 = SmolLM-blend era, v3 = 6-source blend era (see `data/` READMEs).
 
 ## Key Design Decisions
 

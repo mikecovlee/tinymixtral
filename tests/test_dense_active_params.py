@@ -6,15 +6,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
+from model.dense.config import TinyMistralConfig
+from model.dense.modeling import TinyMistralForCausalLM
 
-CFG = str(Path(__file__).parent.parent / "versions" / "v3.0-dense-276m" / "configs" / "v3.0-dense-276m.json")
+CFG = str(Path(__file__).parent.parent / "config" / "v3.0-dense-276m" / "v3.0-dense-276m.json")
 EXPECT_TOTAL = 276_073_472
 
 
 def test_config_keys():
-    cfg = TinyMixtralConfig.from_json_file(CFG)
+    cfg = TinyMistralConfig.from_json_file(CFG)
     assert cfg.num_local_experts == 0
     assert cfg.num_experts_per_tok == 0
     assert cfg.expert_intermediate_size == 4096
@@ -31,9 +31,9 @@ def test_config_keys():
 
 
 def test_param_count_exact():
-    cfg = TinyMixtralConfig.from_json_file(CFG)
+    cfg = TinyMistralConfig.from_json_file(CFG)
     with torch.device("meta"):
-        model = TinyMixtralForCausalLM(cfg)
+        model = TinyMistralForCausalLM(cfg)
     n = sum(p.numel() for p in model.parameters())
     assert n == EXPECT_TOTAL, f"expected {EXPECT_TOTAL}, got {n}"
 

@@ -4,7 +4,7 @@
 parameters (top-2 of 4 routed experts), trained from scratch on **8.05B tokens** on a single GPU.
 
 - HF repo: `mikecovlee/tinymixtral`
-- Config: `versions/v3.0/configs/improve_v05b.json`
+- Config: `config/v3.0/improve_v05b.json`
 
 ## Architecture
 
@@ -289,7 +289,7 @@ is sized from the token budget, `--lr` overrides the saved LR, AdamW momentum ca
 `--chunked-ce` is off by default but the v3.0 run used it — pass it on **every** segment.
 
 ```bash
-CFG=versions/v3.0/configs/improve_v05b.json
+CFG=config/v3.0/improve_v05b.json
 DATA=data/pretrain
 COMMON="--schedule wsd --warmup-steps 700 --batch-size 48 --bf16-optim --chunked-ce \
         --save-every-min 60 --log-every 100 --eval-every-steps 500 --keep-last-checkpoints 2"

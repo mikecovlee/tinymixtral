@@ -22,7 +22,7 @@ def _load(name, relpath):
     return mod
 
 
-_build = _load("v30it_build_dataset", "versions/v3.0-it/data/build_dataset.py")
+_build = _load("v30it_build_dataset", "data/v3/sft/build_dataset.py")
 _train = _load("v30it_train_sft", "versions/v3.0-it/train_sft.py")
 
 _NUM_PERM = _build._NUM_PERM
@@ -185,8 +185,8 @@ TINY = dict(
 
 
 def test_publish_hf_whitelist(tmp_path):
-    from model.config import TinyMixtralConfig
-    from model.modeling import TinyMixtralForCausalLM
+    from model.topk.config import TinyMixtralConfig
+    from model.topk.modeling import TinyMixtralForCausalLM
 
     torch.manual_seed(0)
     model = TinyMixtralForCausalLM(TinyMixtralConfig(**TINY))

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 
-from model.modeling import TinyMixtralForCausalLM
+from model import from_pretrained
 from scripts.train_utils import (
     BF16AdamW,
     check_checkpoint_disk_space,
@@ -81,7 +81,7 @@ def main():
     print(f"Loading {latest} (step {step_done})...", flush=True)
 
     # ---- 模型 ----
-    model = TinyMixtralForCausalLM.from_pretrained(str(latest))
+    model = from_pretrained(str(latest))
     if args.seq_len > model.config.max_position_embeddings:
         p.error(
             f"seq-len {args.seq_len} exceeds model limit "

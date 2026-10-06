@@ -6,7 +6,7 @@ a single GPU. Released as `mikecovlee/tinymixtral-it` on the HF Hub.
 
 - HF repo: `mikecovlee/tinymixtral-it`
 - Base model: `mikecovlee/tinymixtral` (v3.0, see `versions/v3.0/`)
-- Training config: `versions/v3.0-it/configs/3m.json` (the final run)
+- Training config: `config/v3.0-it/3m.json` (the final run)
 
 ## Bundle Contents
 

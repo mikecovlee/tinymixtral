@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
+from model.topk.config import TinyMixtralConfig
+from model.topk.modeling import TinyMixtralForCausalLM
 
 ROOT = Path(__file__).parent.parent
 
@@ -40,13 +40,17 @@ def old_modeling(tmp_path_factory):
             ["git", "-C", str(ROOT), "show", "42b09f1:model/modeling.py"],
             capture_output=True, text=True, encoding="utf-8", check=True,
         ).stdout
+        cfg_src = subprocess.run(
+            ["git", "-C", str(ROOT), "show", "42b09f1:model/config.py"],
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        ).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("historical baseline commit 42b09f1 not reachable in this clone")
     pkg_root = tmp_path_factory.mktemp("oldpkg")
     pkg = pkg_root / "oldmodeling"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    (pkg / "config.py").write_text((ROOT / "model/config.py").read_text(encoding="utf-8"), encoding="utf-8")
+    (pkg / "config.py").write_text(cfg_src, encoding="utf-8")
     (pkg / "modeling.py").write_text(src, encoding="utf-8")
     sys.path.insert(0, str(pkg_root))
     try:

@@ -1,11 +1,10 @@
 # Copyright (C) Michael Lee (李登淳) 2026. All rights reserved.
 # Open-source under the MIT License. See LICENSE for details.
 
-"""Parity guard: model/ (training) vs hf/ (published) must compute identically.
+"""Parity guard: model/<mech>/ (training) vs model/<mech>/hf/ (published) must match.
 
-model/modeling.py is the source of truth; hf/modeling_tinymixtral.py is the
-trust_remote_code export shipped in published repos. This test pins their
-numerical behaviour so the two copies cannot silently drift.
+Each mechanism package owns its trust_remote_code export; this test pins
+numerical behaviour so the copies cannot silently drift (topk + dense).
 """
 
 import sys
@@ -18,10 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from hf.configuration_tinymixtral import TinyMixtralConfig as HFConfig  # noqa: E402
-from hf.modeling_tinymixtral import TinyMixtralForCausalLM as HFModel  # noqa: E402
-from model.config import TinyMixtralConfig as TrainConfig  # noqa: E402
-from model.modeling import TinyMixtralForCausalLM as TrainModel  # noqa: E402
+from model.dense.config import TinyMistralConfig as DenseConfig  # noqa: E402
+from model.dense.hf.configuration_tinymistral import (  # noqa: E402
+    TinyMistralConfig as DenseHFConfig,
+)
+from model.dense.hf.modeling_tinymistral import TinyMistralForCausalLM as DenseHFModel  # noqa: E402
+from model.dense.modeling import TinyMistralForCausalLM as DenseModel  # noqa: E402
+from model.topk.config import TinyMixtralConfig as TrainConfig  # noqa: E402
+from model.topk.hf.configuration_tinymixtral import TinyMixtralConfig as HFConfig  # noqa: E402
+from model.topk.hf.modeling_tinymixtral import TinyMixtralForCausalLM as HFModel  # noqa: E402
+from model.topk.modeling import TinyMixtralForCausalLM as TrainModel  # noqa: E402
 
 TINY = dict(
     vocab_size=97,
@@ -89,8 +94,8 @@ TINY_DENSE = {**TINY, "num_local_experts": 0, "num_experts_per_tok": 0}
 
 def _models_dense():
     torch.manual_seed(0)
-    m_train = TrainModel(TrainConfig(**TINY_DENSE))
-    m_hf = HFModel(HFConfig(**TINY_DENSE))
+    m_train = DenseModel(DenseConfig(**TINY_DENSE))
+    m_hf = DenseHFModel(DenseHFConfig(**TINY_DENSE))
     m_hf.load_state_dict(m_train.state_dict(), strict=True)
     m_train.eval()
     m_hf.eval()
@@ -98,8 +103,8 @@ def _models_dense():
 
 
 def test_dense_state_dict_keys_parity():
-    m_train = TrainModel(TrainConfig(**TINY_DENSE))
-    m_hf = HFModel(HFConfig(**TINY_DENSE))
+    m_train = DenseModel(DenseConfig(**TINY_DENSE))
+    m_hf = DenseHFModel(DenseHFConfig(**TINY_DENSE))
     assert set(m_train.state_dict()) == set(m_hf.state_dict())
 
 
@@ -148,26 +153,26 @@ def _dense_expected_params(cfg):
 
 
 def test_v3_dense_config_param_count(root):
-    cfg = TrainConfig.from_json_file(
-        str(root / "versions" / "v3.0-dense-276m" / "configs" / "v3.0-dense-276m.json")
+    cfg = DenseConfig.from_json_file(
+        str(root / "config" / "v3.0-dense-276m" / "v3.0-dense-276m.json")
     )
     assert cfg.num_local_experts == 0
     assert cfg.num_experts_per_tok == 0
     assert cfg.expert_intermediate_size == 4096
-    model = TrainModel(cfg)
+    model = DenseModel(cfg)
     n = model.num_parameters
     assert n == _dense_expected_params(cfg)
     assert 276_000_000 < n < 276_100_000
 
 
 def test_v3_dense_477m_param_count(root):
-    cfg = TrainConfig.from_json_file(
-        str(root / "versions" / "v3.0-dense-477m" / "configs" / "v3.0-dense-477m.json")
+    cfg = DenseConfig.from_json_file(
+        str(root / "config" / "v3.0-dense-477m" / "v3.0-dense-477m.json")
     )
     assert cfg.num_local_experts == 0
     assert cfg.num_experts_per_tok == 0
     assert cfg.expert_intermediate_size == 8192
-    model = TrainModel(cfg)
+    model = DenseModel(cfg)
     n = model.num_parameters
     assert n == _dense_expected_params(cfg)
     assert 477_000_000 < n < 478_000_000

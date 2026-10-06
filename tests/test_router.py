@@ -4,8 +4,8 @@
 import pytest
 import torch
 
-from model.config import TinyMixtralConfig
-from model.modeling import SparseMoE
+from model.topk.config import TinyMixtralConfig
+from model.topk.modeling import SparseMoE
 
 
 def tiny_moe(top_k: int, seed: int = 0) -> SparseMoE:

@@ -3,8 +3,8 @@
 
 import torch
 
-from model.config import TinyMixtralConfig
-from model.modeling import SparseMoE
+from model.topk.config import TinyMixtralConfig
+from model.topk.modeling import SparseMoE
 
 
 def tiny_moe(aux_coef: float = 0.01) -> SparseMoE:

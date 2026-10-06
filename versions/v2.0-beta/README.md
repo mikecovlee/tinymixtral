@@ -1,11 +1,12 @@
 # TinyMixtral v2.0 beta — Shared Expert
 
 Architecture-ablation release: adds a DeepSeek-style always-on **shared expert** to the MoE layer.
-Code lives in [`shared_expert/`](../../shared_expert/).
+Code lives in [`model/shared_topk/`](../../model/shared_topk/) (the shared-expert MoE mechanism package).
 
-> **Frozen historical code.** `shared_expert/` is a self-contained snapshot of the training stack as
-> of this experiment; it is kept for reproducibility and is not maintained alongside the mainline
-> `model/`, `hf/` and `scripts/`. Config: [`configs/config.json`](configs/config.json).
+> **Note.** The shared-expert mechanism lives in [`model/shared_topk/`](../../model/shared_topk/)
+> (self-contained package: config.py + modeling.py + hf/), migrated from the frozen `shared_expert/`
+> snapshot. Training uses the shared `scripts/train.py` / `scripts/resume.py` — the config dispatcher
+> routes to this mechanism automatically. Config: [`config/v2.0-beta/config.json`](../../config/v2.0-beta/config.json).
 
 - HF: [`mikecovlee/tinymixtral-v2.0-beta`](https://huggingface.co/mikecovlee/tinymixtral-v2.0-beta)
 
@@ -27,13 +28,13 @@ experts specialize via top-2 gating. Output is the sum of both.
 ## Training
 
 ```bash
-python shared_expert/scripts/train.py --config versions/v2.0-beta/configs/config.json \
+python scripts/train.py --config config/v2.0-beta/config.json \
   --cache-dir data/pretrain/smollm_blend \
   --output-dir checkpoints/v2 --batch-size 22 \
   --max-tokens 4000000000 --lr 7e-4 --schedule wsd \
   --warmup-steps 2000 --save-every-min 120
 
-python shared_expert/scripts/resume.py --checkpoint-dir checkpoints/v2 \
+python scripts/resume.py --checkpoint-dir checkpoints/v2 \
   --output-dir checkpoints/v2_posttrain \
   --cache-dir data/posttrain2/knowledge_blend \
   --max-tokens 1000000000 --lr 2e-5 --warmup-steps 300 \

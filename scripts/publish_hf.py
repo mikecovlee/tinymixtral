@@ -20,8 +20,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hf.configuration_tinymixtral import TinyMixtralConfig
-from hf.modeling_tinymixtral import TinyMixtralForCausalLM
+from model import peek_mechanism
 
 
 def main():
@@ -40,19 +39,36 @@ def main():
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
 
-    # 1. 从旧 config 读取参数，创建 HF 兼容 config
+    # 1. 从旧 config 读取参数，创建 HF 兼容 config（按机制方言选择对应的 hf 镜像）
     cfg_file = ckpt / "config.json"
     if cfg_file.exists():
         with open(cfg_file) as f:
             old = json.load(f)
     else:
         old = {}
-    valid = {k: v for k, v in old.items() if k in TinyMixtralConfig().__dict__}
-    config = TinyMixtralConfig(**valid)
+    mech = peek_mechanism(old)
+    if mech == "dense":
+        from model.dense.hf.configuration_tinymistral import TinyMistralConfig as HFConfig
+        from model.dense.hf.modeling_tinymistral import TinyMistralForCausalLM as HFModel
+        hf_pkg, hf_cfg_file, hf_model_file = "dense", "configuration_tinymistral.py", "modeling_tinymistral.py"
+        auto_cfg, auto_model = "configuration_tinymistral.TinyMistralConfig", "modeling_tinymistral.TinyMistralForCausalLM"
+    elif mech == "shared_topk":
+        from model.shared_topk.hf.configuration_tinymixtral import TinyMixtralConfig as HFConfig
+        from model.shared_topk.hf.modeling_tinymixtral import TinyMixtralForCausalLM as HFModel
+        hf_pkg, hf_cfg_file, hf_model_file = "shared_topk", "configuration_tinymixtral.py", "modeling_tinymixtral.py"
+        auto_cfg, auto_model = "configuration_tinymixtral.TinyMixtralConfig", "modeling_tinymixtral.TinyMixtralForCausalLM"
+    else:
+        from model.topk.hf.configuration_tinymixtral import TinyMixtralConfig as HFConfig
+        from model.topk.hf.modeling_tinymixtral import TinyMixtralForCausalLM as HFModel
+        hf_pkg, hf_cfg_file, hf_model_file = "topk", "configuration_tinymixtral.py", "modeling_tinymixtral.py"
+        auto_cfg, auto_model = "configuration_tinymixtral.TinyMixtralConfig", "modeling_tinymixtral.TinyMixtralForCausalLM"
+    print(f"Mechanism: {mech} -> model/{hf_pkg}/hf/")
+    valid = {k: v for k, v in old.items() if k in HFConfig().__dict__}
+    config = HFConfig(**valid)
 
     # 2. 加载权重
     print(f"Loading {bin_file} ...")
-    model = TinyMixtralForCausalLM(config)
+    model = HFModel(config)
     state_dict = torch.load(bin_file, map_location="cpu", weights_only=True)
     model.load_state_dict(state_dict, strict=True)
     nM = sum(p.numel() for p in model.parameters()) / 1e6
@@ -67,8 +83,8 @@ def main():
     cfg_path = output / "config.json"
     cfg = json.loads(cfg_path.read_text())
     cfg["auto_map"] = {
-        "AutoConfig": "configuration_tinymixtral.TinyMixtralConfig",
-        "AutoModelForCausalLM": "modeling_tinymixtral.TinyMixtralForCausalLM",
+        "AutoConfig": auto_cfg,
+        "AutoModelForCausalLM": auto_model,
     }
     cfg_path.write_text(json.dumps(cfg, indent=2))
 
@@ -84,11 +100,11 @@ def main():
 
     # 4. 复制兼容层代码 + LICENSE 到 publish
     root = Path(__file__).parent.parent
-    hf_dir = root / "hf"
-    for name in ("configuration_tinymixtral.py", "modeling_tinymixtral.py"):
+    hf_dir = root / "model" / hf_pkg / "hf"
+    for name in (hf_cfg_file, hf_model_file):
         shutil.copy(hf_dir / name, output / name)
     shutil.copy(root / "LICENSE", output / "LICENSE")
-    print("Copied configuration_tinymixtral.py + modeling_tinymixtral.py + LICENSE")
+    print(f"Copied {hf_cfg_file} + {hf_model_file} + LICENSE")
 
     # 5. tokenizer
     if args.tokenizer:

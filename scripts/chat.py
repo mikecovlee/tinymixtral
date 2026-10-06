@@ -18,7 +18,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from transformers import AutoTokenizer
 
-from model.modeling import TinyMixtralForCausalLM
+from model import from_pretrained
 
 
 def generate(model, tokenizer, prompt, max_new_tokens=256, temperature=0.7, top_p=0.9):
@@ -95,7 +95,7 @@ def main():
         print("CUDA not available, falling back to CPU")
         device = torch.device("cpu")
     print(f"Loading model from {args.checkpoint} ...")
-    model = TinyMixtralForCausalLM.from_pretrained(args.checkpoint)
+    model = from_pretrained(args.checkpoint)
     model.eval()
     model = model.to(device)
     if device.type == "cuda":

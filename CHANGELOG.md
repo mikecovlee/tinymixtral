@@ -31,7 +31,7 @@ Released as `mikecovlee/tinymixtral-it` (HF Hub); internal name `v3.0-it` (3M-ro
 ## v2.0-beta (2026) — shared-expert ablation
 
 - 498M/241M with one always-on shared expert; harness 0.389.
-  Frozen code snapshot kept in `shared_expert/`.
+  Shared-expert mechanism lives in `model/shared_topk/` (merged from the frozen `shared_expert/` snapshot).
 
 ## v1.1-1b (2026)
 

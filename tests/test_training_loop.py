@@ -5,8 +5,8 @@ import math
 
 import torch
 
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
+from model.topk.config import TinyMixtralConfig
+from model.topk.modeling import TinyMixtralForCausalLM
 from scripts.train_utils import make_adamw, make_cosine_schedule, make_val_evaluator, training_loop
 
 

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from model.config import TinyMixtralConfig
+from model.topk.config import TinyMixtralConfig
 
 
 def test_use_qk_norm_defaults_false():
@@ -42,17 +42,13 @@ def test_validation_catches_bad_qk_combo():
 
 
 def _load_shared_expert_config(root):
-    import importlib.util
-    path = root / "shared_expert" / "model" / "config.py"
-    spec = importlib.util.spec_from_file_location("shared_expert_config", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.TinyMixtralConfig
+    from model.shared_topk.config import TinyMixtralConfig
+    return TinyMixtralConfig
 
 
 def test_repo_configs_load(root):
     import glob
-    for path in glob.glob(str(root / "versions/*/configs/*.json")):
+    for path in glob.glob(str(root / "config/*/*.json")):
         cls = _load_shared_expert_config(root) if "v2.0-beta" in path else TinyMixtralConfig
         cfg = cls.from_json_file(path)
         assert cfg.hidden_size == cfg.num_attention_heads * cfg.head_dim

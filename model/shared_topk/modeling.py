@@ -9,7 +9,6 @@
 - 支持 activation checkpointing, FlashAttention (sdpa)
 """
 
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,7 +16,6 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import TinyMixtralConfig
-
 
 # ============================================================
 # RMSNorm
@@ -101,8 +99,8 @@ class GQAAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         B, S, _ = hidden_states.shape
 
@@ -205,7 +203,7 @@ class SparseMoE(nn.Module):
         up = torch.matmul(x, up_w.T)
         return torch.matmul(gate * up, down_w.T)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         B, S, D = x.shape
         x_flat = x.view(-1, D)
 
@@ -284,9 +282,9 @@ class MoETransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # Self-attention
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -356,8 +354,8 @@ class TinyMixtralForCausalLM(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
         return_dict: bool = True,
     ) -> dict:
         """
@@ -421,7 +419,7 @@ class TinyMixtralForCausalLM(nn.Module):
         torch.save(state_dict, f"{path}/pytorch_model.bin")
 
     @classmethod
-    def from_pretrained(cls, path: str, config: Optional[TinyMixtralConfig] = None) -> "TinyMixtralForCausalLM":
+    def from_pretrained(cls, path: str, config: TinyMixtralConfig | None = None) -> "TinyMixtralForCausalLM":
         """从 HF 格式加载模型。"""
         if config is None:
             config = TinyMixtralConfig.from_json_file(f"{path}/config.json")

@@ -3,8 +3,8 @@
 
 import torch
 
-from model.config import TinyMixtralConfig
-from model.modeling import TinyMixtralForCausalLM
+from model.topk.config import TinyMixtralConfig
+from model.topk.modeling import TinyMixtralForCausalLM
 
 
 def tiny_model(**over) -> TinyMixtralForCausalLM:

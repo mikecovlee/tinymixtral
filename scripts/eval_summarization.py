@@ -56,8 +56,8 @@ def load_model(checkpoint_path, device, precision):
         is_custom = "num_local_experts" in cfg
 
     if is_custom:
-        from hf.modeling_tinymixtral import TinyMixtralForCausalLM
-        model = TinyMixtralForCausalLM.from_pretrained(str(ckpt))
+        from model import from_pretrained
+        model = from_pretrained(str(ckpt))
     else:
         from transformers import AutoModelForCausalLM
         model = AutoModelForCausalLM.from_pretrained(

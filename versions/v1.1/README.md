@@ -10,7 +10,7 @@ that replaced C4 with FineWeb-Edu + Cosmopedia v2.
 - Data: FineWeb-Edu + Cosmopedia v2 (≈89:11; mixed 36:4), 4B tokens
 - LR: 7e-4 (swept over {1e-4, 3e-4, 5e-4, 7e-4} on 100M-token runs; 7e-4 best)
 - Batch: 24 × 1024; cosine with 2,000-step warmup
-- Config: [`versions/v1.1/configs/config.json`](configs/config.json)
+- Config: [`config/v1.1/config.json`](../../config/v1.1/config.json)
 
 ## Reproduce
 
@@ -27,7 +27,7 @@ python scripts/mix_data.py data/pretrain/fineweb data/pretrain/cosmopedia \
   --output data/pretrain/smollm_blend --weights 36 4
 
 # train (4B tokens)
-python scripts/train.py --config versions/v1.1/configs/config.json \
+python scripts/train.py --config config/v1.1/config.json \
   --cache-dir data/pretrain/smollm_blend \
   --batch-size 24 --max-tokens 4000000000 --lr 7e-4 --warmup-steps 2000
 ```

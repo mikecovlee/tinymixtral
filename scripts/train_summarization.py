@@ -21,7 +21,7 @@ import torch
 from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.modeling import TinyMixtralForCausalLM
+from model import from_pretrained
 from scripts.train_utils import make_adamw, make_cosine_schedule
 
 
@@ -96,7 +96,7 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     print(f"Loading model from {args.checkpoint}...", flush=True)
-    model = TinyMixtralForCausalLM.from_pretrained(args.checkpoint)
+    model = from_pretrained(args.checkpoint)
     model = model.to(device=device, dtype=torch.bfloat16).train()
     model.gradient_checkpointing_enable()
     print(f"Model: {sum(p.numel() for p in model.parameters()):,} params", flush=True)
