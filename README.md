@@ -1,3 +1,10 @@
+> This branch adds the **tinymixtral-v3.0-downdp-adaptive-codeupdate** CPT router as a
+> pure increment in the top-level `cpt_model/` package: `model/` stays byte-identical
+> to `main`, linear mode (main-compatible) and CPT mode coexist. See
+> [CPT_MODEL.md](CPT_MODEL.md) for details, training protocol and validation. The
+> upstream documentation below describes both router modes' backbone and the original
+> models' results.
+
 # TinyMixtral
 
 A Mixtral-style Mixture-of-Experts causal language model for pretraining research on a single

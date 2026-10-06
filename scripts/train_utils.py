@@ -79,15 +79,23 @@ class BF16AdamW(torch.optim.AdamW):
 def make_adamw(model, lr, weight_decay, betas=(0.9, 0.95), bf16_states=False):
     """构建 AdamW：矩阵权重衰减，RMSNorm 等 1D 参数不衰减。
 
+    模型可通过 no_weight_decay_parameters() 声明免衰减参数
+    （如 CPT anchors：约束在单位球面，衰减无意义）。
+
     bf16_states=True 时使用 BF16AdamW，优化器状态存储为 bf16，
     节省约 50% 优化器显存。
     """
+    skip_decay = {
+        id(parameter)
+        for parameter in (model.no_weight_decay_parameters() if hasattr(model, "no_weight_decay_parameters") else ())
+    }
     decay = []
     no_decay = []
     for parameter in model.parameters():
         if not parameter.requires_grad:
             continue
-        (decay if parameter.ndim >= 2 else no_decay).append(parameter)
+        decayed = parameter.ndim >= 2 and id(parameter) not in skip_decay
+        (decay if decayed else no_decay).append(parameter)
     cls = BF16AdamW if bf16_states else torch.optim.AdamW
     return cls(
         [
@@ -354,7 +362,14 @@ def training_loop(model, opt, sched, files, fi, ptr, total_tok, bs, seq, chunk,
             if not torch.isfinite(grad_norm):
                 opt.zero_grad(set_to_none=True)
                 raise FloatingPointError(f"Non-finite gradient norm at step {step + 1}: {grad_norm.item()}")
+            cpt_transaction = out.get("cpt_transaction")
+            if cpt_transaction is not None:
+                model.validate_cpt_transaction(cpt_transaction)
             opt.step()
+            if cpt_transaction is not None:
+                model.commit_cpt_transaction(
+                    cpt_transaction, optimizer_step=model.get_cpt_optimizer_step() + 1,
+                )
             sched.step()
             opt.zero_grad(set_to_none=True)
             step += 1
