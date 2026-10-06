@@ -131,16 +131,8 @@ def test_dense_loss_parity():
     torch.testing.assert_close(loss_train, loss_hf, atol=1e-5, rtol=1e-4)
 
 
-def test_v3_dense_config_param_count(root):
-    cfg = TrainConfig.from_json_file(
-        str(root / "versions" / "v3.0-dense-276m" / "configs" / "v3.0-dense-276m.json")
-    )
-    assert cfg.num_local_experts == 0
-    assert cfg.num_experts_per_tok == 0
-    assert cfg.expert_intermediate_size == 4096
-    model = TrainModel(cfg)
-    n = model.num_parameters
-    expected = (
+def _dense_expected_params(cfg):
+    return (
         cfg.vocab_size * cfg.hidden_size
         + cfg.hidden_size
         + cfg.num_hidden_layers
@@ -153,5 +145,29 @@ def test_v3_dense_config_param_count(root):
             + 3 * cfg.hidden_size * cfg.expert_intermediate_size
         )
     )
-    assert n == expected
+
+
+def test_v3_dense_config_param_count(root):
+    cfg = TrainConfig.from_json_file(
+        str(root / "versions" / "v3.0-dense-276m" / "configs" / "v3.0-dense-276m.json")
+    )
+    assert cfg.num_local_experts == 0
+    assert cfg.num_experts_per_tok == 0
+    assert cfg.expert_intermediate_size == 4096
+    model = TrainModel(cfg)
+    n = model.num_parameters
+    assert n == _dense_expected_params(cfg)
     assert 276_000_000 < n < 276_100_000
+
+
+def test_v3_dense_477m_param_count(root):
+    cfg = TrainConfig.from_json_file(
+        str(root / "versions" / "v3.0-dense-477m" / "configs" / "v3.0-dense-477m.json")
+    )
+    assert cfg.num_local_experts == 0
+    assert cfg.num_experts_per_tok == 0
+    assert cfg.expert_intermediate_size == 8192
+    model = TrainModel(cfg)
+    n = model.num_parameters
+    assert n == _dense_expected_params(cfg)
+    assert 477_000_000 < n < 478_000_000
