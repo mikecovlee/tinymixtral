@@ -5,13 +5,13 @@
 
 用法:
     # 从零训练 SentencePiece tokenizer
-    python scripts/prepare_tokenizer.py \
+    python data/pipeline/prepare_tokenizer.py \
         --train-files data/raw/*.txt \
         --output tokenizer/ \
         --vocab-size 32000
 
     # 下载并使用已有的 HuggingFace tokenizer
-    python scripts/prepare_tokenizer.py \
+    python data/pipeline/prepare_tokenizer.py \
         --from-hf meta-llama/Llama-2-7b-hf \
         --output tokenizer/
 """
@@ -21,7 +21,7 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 from model import default_config
 
 

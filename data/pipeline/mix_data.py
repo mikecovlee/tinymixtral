@@ -5,10 +5,10 @@
 
 用法:
     # 等权重混合
-    python scripts/mix_data.py data/fineweb data/cosmopedia --output data/mixed
+    python data/pipeline/mix_data.py data/fineweb data/cosmopedia --output data/mixed
 
     # 加权混合（4:1 = 80/20）
-    python scripts/mix_data.py data/fineweb data/code --output data/mixed --weights 4 1
+    python data/pipeline/mix_data.py data/fineweb data/code --output data/mixed --weights 4 1
 """
 
 import argparse

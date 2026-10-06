@@ -8,9 +8,9 @@ reproducibility; **superseded by v3.0**.
 ## Data preparation
 
 ```bash
-python scripts/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
+python data/pipeline/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
 
-python scripts/prepare_data.py --dataset allenai/c4 --subset en \
+python data/pipeline/prepare_data.py --dataset allenai/c4 --subset en \
   --tokenizer tokenizer/ --output data/c4/tokenized \
   --max-tokens 4000000000 --force
 ```

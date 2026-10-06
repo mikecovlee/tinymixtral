@@ -111,8 +111,8 @@ pip install -r requirements.txt
 
 Training: `scripts/train.py` (single run) / `scripts/resume.py` (resume + continuation) /
 `versions/v3.0/scripts/run_segment.ps1` (the v3.0 4-segment launcher). Data is tokenized once to `.pt` shards
-(`scripts/prepare_data.py`), optionally combined (`scripts/mix_data.py`,
-`scripts/make_blend_shards.py`). Per-version recipes are in the version cards above; see
+(`data/pipeline/prepare_data.py`), optionally combined (`data/pipeline/mix_data.py`,
+`data/pipeline/make_blend_shards.py`). Per-version recipes are in the version cards above; see
 [`REPRODUCE.md`](REPRODUCE.md) for the end-to-end walkthrough.
 
 ## Evaluation
@@ -182,13 +182,14 @@ tinymixtral/
 │   ├── v1.0/  v1.1/  v1.1-1b/  v2.0-beta/
 │   └── v3.0/  v3.0-dense-276m/  v3.0-dense-477m/  v3.0-it/
 ├── data/           # reproduction recipes only (data itself lives off-repo)
-│   ├── v1/         # C4-en 4B pretrain + 1B post-train (v1.0)
-│   ├── v2/         # smollm_blend + knowledge_blend (v1.1 / v1.1-1b / v2.0-beta)
-│   └── v3/         # main_s1..s4 6-source blend + sft/ (v3.0 / v3.0-it / dense)
+│   ├── pipeline/   # shared data pipeline (download / convert / mix / blend / prepare_*)
+│   ├── v1/         # C4-en 4B pretrain + 1B post-train (v1.0): prepare_pretrain.py / prepare_posttrain.py
+│   ├── v2/         # smollm_blend + knowledge_blend (v1.1 / v1.1-1b / v2.0-beta): prepare_pretrain.py / prepare_posttrain.py
+│   └── v3/         # main_s1..s4 6-source blend + sft/ (v3.0 / v3.0-it / dense): prepare_pretrain.py / prepare_sft.py
 ├── versions/       # per-version release cards (README / REPORT / REPRODUCE only)
 │   ├── v3.0/  v3.0-it/  v3.0-dense-276m/  v3.0-dense-477m/
 │   └── v2.0-beta/  v1.1-1b/  v1.1/  v1.0/
-├── scripts/        # shared tooling: train/resume/prepare_data(+_local)/download_{parquets,jsonl_zst}/mix_data/make_blend_shards/publish_hf/chat/val_ppl/…
+├── scripts/        # shared tooling: train/resume/train_utils/train_summarization · val_ppl/eval_summarization/run_ifeval_all.sh · chat/chat_hf/chat_ui · publish_hf/benchmark
 ├── configs/        # hardware profile + shared config dirs
 ├── evals/          # legacy eval outputs (run-local lm-eval results)
 ├── docs/           # DATA_LICENSES.md (dataset provenance)

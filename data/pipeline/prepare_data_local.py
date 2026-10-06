@@ -3,7 +3,7 @@
 # Open-source under the MIT License. See LICENSE for details.
 """从本地 parquet 文件 tokenize 成 .pt shards（网络代理下 datasets 流式读取低效时的替代方案）。
 
-与 scripts/prepare_data.py 的语义完全一致：
+与 data/pipeline/prepare_data.py 的语义完全一致：
   - 每个文档 `encode(text, add_special_tokens=False)` 后追加 eos
   - 文档 `len(text) < 10` 跳过
   - `--skip-tokens` 按「编码后 token 流」精确跳过（可落在文档中间，取该文档尾部）
@@ -11,9 +11,9 @@
   - 输出 100M-token 的 int64 shard（train_NNNN.pt），staging -> 原子替换
 
 用法:
-    # 1) 先并行下载整文件（见 scripts/download_parquets.py）
+    # 1) 先并行下载整文件（见 data/pipeline/download_parquets.py）
     # 2) 本地 tokenize（多进程绕开 GIL）
-    python scripts/prepare_data_local.py \
+    python data/pipeline/prepare_data_local.py \
         --input data/raw/fineweb3 --tokenizer tokenizer/ \
         --output data/pretrain/fineweb3 \
         --skip-tokens 7120000000 --max-tokens 3560000000 --force --workers 8
@@ -31,7 +31,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import torch
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 
 _TOK = None

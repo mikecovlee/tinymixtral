@@ -3,11 +3,11 @@
 """构建 pilot 混合数据集：按精确比例交错多源 shard，硬链零拷贝。
 
 用法（两次连续构建，段互不重叠）:
-    python scripts/make_blend_shards.py --output data/pretrain/pilot_blend30 \
+    python data/pipeline/make_blend_shards.py --output data/pretrain/pilot_blend30 \
         --source data/pretrain/fineweb3 --take 7 \
         --source data/pretrain/cosmopedia3 --take 3 --val-take 1
     # 续训新段：--start 跳过上一次已用的 shard（fineweb3 0..6，cosmopedia3 0..3）
-    python scripts/make_blend_shards.py --output data/pretrain/pilot_blend30b \
+    python data/pipeline/make_blend_shards.py --output data/pretrain/pilot_blend30b \
         --source data/pretrain/fineweb3 --start 7 --take 7 \
         --source data/pretrain/cosmopedia3 --start 4 --take 3 --val-take 1
 

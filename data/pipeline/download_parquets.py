@@ -4,14 +4,14 @@
 """并行下载 HF dataset 仓库中某个目录下的全部 parquet 文件到本地。
 
 用于网络代理下 `datasets` 流式读取（xet/range 请求）效率低时的替代方案：
-先把整文件拉下来，再用 scripts/prepare_data_local.py 本地 tokenize。
+先把整文件拉下来，再用 data/pipeline/prepare_data_local.py 本地 tokenize。
 
 用法:
-    python scripts/download_parquets.py \
+    python data/pipeline/download_parquets.py \
         --repo HuggingFaceFW/fineweb-edu --subdir sample/10BT \
         --output data/raw/fineweb3 --workers 4
 
-    python scripts/download_parquets.py \
+    python data/pipeline/download_parquets.py \
         --repo HuggingFaceTB/cosmopedia-v2 --subdir cosmopedia-v2 \
         --output data/raw/cosmopedia3 --first 8
 """

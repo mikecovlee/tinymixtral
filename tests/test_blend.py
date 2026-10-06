@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.make_blend_shards import interleave
+from data.pipeline.make_blend_shards import interleave
 
 
 def make_entries():
@@ -42,7 +42,7 @@ def test_end_to_end_hardlinks_and_val(tmp_path):
         (fw / f"train_{i:04d}.pt").write_bytes(b"x" * 8)
     for i in range(3):
         (co / f"train_{i:04d}.pt").write_bytes(b"y" * 8)
-    script = Path(__file__).parent.parent / "scripts" / "make_blend_shards.py"
+    script = Path(__file__).parent.parent / "data" / "pipeline" / "make_blend_shards.py"
     subprocess.run([
         sys.executable, str(script), "--output", str(tmp_path / "blend"),
         "--source", str(fw), "--take", "3", "--val-take", "1",
@@ -71,7 +71,7 @@ def test_start_offset_disjoint(tmp_path):
     src.mkdir()
     for i in range(10):
         (src / f"train_{i:04d}.pt").write_bytes(b"x" * 8)
-    script = Path(__file__).parent.parent / "scripts" / "make_blend_shards.py"
+    script = Path(__file__).parent.parent / "data" / "pipeline" / "make_blend_shards.py"
     subprocess.run([
         sys.executable, str(script), "--output", str(tmp_path / "blend_a"),
         "--source", str(src), "--take", "4", "--val-take", "0",
@@ -91,7 +91,7 @@ def test_start_out_of_range_fails(tmp_path):
     src.mkdir()
     for i in range(5):
         (src / f"train_{i:04d}.pt").write_bytes(b"x" * 8)
-    script = Path(__file__).parent.parent / "scripts" / "make_blend_shards.py"
+    script = Path(__file__).parent.parent / "data" / "pipeline" / "make_blend_shards.py"
     proc = subprocess.run([
         sys.executable, str(script), "--output", str(tmp_path / "blend"),
         "--source", str(src), "--take", "2", "--val-take", "0", "--start", "4",
@@ -106,7 +106,7 @@ def test_start_val_isolation(tmp_path):
     src.mkdir()
     for i in range(6):
         (src / f"train_{i:04d}.pt").write_bytes(bytes([i + 1]) * 8)
-    script = Path(__file__).parent.parent / "scripts" / "make_blend_shards.py"
+    script = Path(__file__).parent.parent / "data" / "pipeline" / "make_blend_shards.py"
     subprocess.run([
         sys.executable, str(script), "--output", str(tmp_path / "blend"),
         "--source", str(src), "--take", "2", "--val-take", "2", "--start", "2",

@@ -5,7 +5,7 @@
 Used for OpenCodeInstruct (columns input/output, no `text`).
 
 Usage:
-    python scripts/columns_to_text_parquet.py \
+    python data/pipeline/columns_to_text_parquet.py \
         --input data/raw/r5_code --output data/raw/r5_code_text \
         --columns input output --sep "\n\n"
 """

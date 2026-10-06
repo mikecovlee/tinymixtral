@@ -17,19 +17,19 @@ pip install -r requirements.txt
 All versions use the same 32k SentencePiece tokenizer (trained on the TinyLlama chat corpus):
 
 ```bash
-python scripts/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
+python data/pipeline/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
 ```
 
 ## 2. Data
 
-Two steps: **tokenize** each source to 100M-token `.pt` shards (`scripts/prepare_data.py`), then
-**blend** the shards — `scripts/mix_data.py` for a simple 2-source interleave, or
-`scripts/make_blend_shards.py` for exact-ratio, slice-controlled, validation-isolated pools.
+Two steps: **tokenize** each source to 100M-token `.pt` shards (`data/pipeline/prepare_data.py`), then
+**blend** the shards — `data/pipeline/mix_data.py` for a simple 2-source interleave, or
+`data/pipeline/make_blend_shards.py` for exact-ratio, slice-controlled, validation-isolated pools.
 
 Large web/code corpora are fetched as whole files rather than streamed:
-`scripts/download_parquets.py` (HF parquet dirs) or `scripts/download_jsonl_zst.py` (DCLM
-`.jsonl.zst`), then `scripts/zst_jsonl_to_parquet.py` / `scripts/columns_to_text_parquet.py`
-normalize them to a single `text` column before `scripts/prepare_data_local.py` tokenizes locally.
+`data/pipeline/download_parquets.py` (HF parquet dirs) or `data/pipeline/download_jsonl_zst.py` (DCLM
+`.jsonl.zst`), then `data/pipeline/zst_jsonl_to_parquet.py` / `data/pipeline/columns_to_text_parquet.py`
+normalize them to a single `text` column before `data/pipeline/prepare_data_local.py` tokenizes locally.
 
 **Data-prep conventions (important):**
 

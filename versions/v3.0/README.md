@@ -33,7 +33,7 @@ Design decisions (validated by the P4a/P4b ablation matrix):
 ## Data
 
 8.05B unique tokens, zero repetition, split into **four strictly disjoint pools**
-(`main_s1..s4` = 2.00 / 1.94 / 2.20 / 1.91B) built by `scripts/make_blend_shards.py`
+(`main_s1..s4` = 2.00 / 1.94 / 2.20 / 1.91B) built by `data/pipeline/make_blend_shards.py`
 (hard-linked, inode-verified). Validation always uses `pilot_blend30_val` (2 held-out shards).
 
 | Source | Share |
@@ -48,63 +48,63 @@ Design decisions (validated by the P4a/P4b ablation matrix):
 ### Reproduce the data pools
 
 Each pool is assembled from 100M-token `.pt` shards. Two acquisition routes are used: HF `datasets`
-streaming via `scripts/prepare_data.py` (clean parquet corpora), and bulk file download via
-`scripts/download_*.py` → `scripts/prepare_data_local.py` (large web/code corpora, avoiding slow
+streaming via `data/pipeline/prepare_data.py` (clean parquet corpora), and bulk file download via
+`data/pipeline/download_*.py` → `data/pipeline/prepare_data_local.py` (large web/code corpora, avoiding slow
 streaming reads).
 
 ```bash
 # tokenizer (shared across versions)
-python scripts/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
+python data/pipeline/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
 
 # FineWeb-Edu (44%) — 3rd 3.56B slice of sample-10BT -> fineweb3
-python scripts/prepare_data.py --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
+python data/pipeline/prepare_data.py --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
   --tokenizer tokenizer/ --output data/pretrain/fineweb3 \
   --skip-tokens 7120000000 --max-tokens 3560000000 --force
 
 # Cosmopedia v2 (synthetic) — 2nd 440M slice -> cosmopedia3
-python scripts/prepare_data.py --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
+python data/pipeline/prepare_data.py --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
   --tokenizer tokenizer/ --output data/pretrain/cosmopedia3 \
   --skip-tokens 880000000 --max-tokens 440000000 --force
 
 # Wikipedia -> r5_wiki
-python scripts/prepare_data.py --dataset wikimedia/wikipedia --subset 20231101.en \
+python data/pipeline/prepare_data.py --dataset wikimedia/wikipedia --subset 20231101.en \
   --tokenizer tokenizer/ --output data/pretrain/r5_wiki --max-tokens 500000000 --force
 
 # DCLM web (20%) — .jsonl.zst shards -> parquet -> .pt shards
-python scripts/download_jsonl_zst.py --repo mlfoundations/dclm-baseline-1.0 \
+python data/pipeline/download_jsonl_zst.py --repo mlfoundations/dclm-baseline-1.0 \
   --subdir global-shard_01_of_10/local-shard_0_of_10 --output data/raw/r5_web --suffix .jsonl.zst
-python scripts/zst_jsonl_to_parquet.py --input data/raw/r5_web --output data/raw/r5_web_pq
-python scripts/prepare_data_local.py --input data/raw/r5_web_pq --tokenizer tokenizer/ \
+python data/pipeline/zst_jsonl_to_parquet.py --input data/raw/r5_web --output data/raw/r5_web_pq
+python data/pipeline/prepare_data_local.py --input data/raw/r5_web_pq --tokenizer tokenizer/ \
   --output data/pretrain/r5_web --max-tokens 1600000000 --force --workers 8
 
 # Code (12.5%) — OpenCodeInstruct (text = input + "\n\n" + output)
-python scripts/download_parquets.py --repo nvidia/OpenCodeInstruct --subdir data \
+python data/pipeline/download_parquets.py --repo nvidia/OpenCodeInstruct --subdir data \
   --output data/raw/r5_code --workers 4
-python scripts/columns_to_text_parquet.py --input data/raw/r5_code \
+python data/pipeline/columns_to_text_parquet.py --input data/raw/r5_code \
   --output data/raw/r5_code_text --columns input output --sep "\n\n"
-python scripts/prepare_data_local.py --input data/raw/r5_code_text --tokenizer tokenizer/ \
+python data/pipeline/prepare_data_local.py --input data/raw/r5_code_text --tokenizer tokenizer/ \
   --output data/pretrain/r5_code --max-tokens 1000000000 --force --workers 8
 
 # Math (~6%) — OpenWebMath (columns url/text/date/metadata), same download route:
-python scripts/download_parquets.py --repo open-web-math/open-web-math --subdir data \
+python data/pipeline/download_parquets.py --repo open-web-math/open-web-math --subdir data \
   --output data/raw/r5_math --workers 4
-python scripts/prepare_data_local.py --input data/raw/r5_math --tokenizer tokenizer/ \
+python data/pipeline/prepare_data_local.py --input data/raw/r5_math --tokenizer tokenizer/ \
   --output data/pretrain/r5_math --max-tokens 500000000 --force --workers 8
 
 # FineWeb-Edu (extra 1B web) — tail 4 parquets of sample/350BT -> p5_web
-python scripts/download_parquets.py --repo HuggingFaceFW/fineweb-edu --subdir sample/350BT \
+python data/pipeline/download_parquets.py --repo HuggingFaceFW/fineweb-edu --subdir sample/350BT \
   --output data/raw/p5_web4 --workers 4 --last 4
-python scripts/prepare_data_local.py --input data/raw/p5_web4 --tokenizer tokenizer/ \
+python data/pipeline/prepare_data_local.py --input data/raw/p5_web4 --tokenizer tokenizer/ \
   --output data/pretrain/p5_web --max-tokens 1000000000 --force --workers 8
 
 # Cosmopedia v2 (extra synthetic 550M) — tail parquets -> p5_synth. Grab the last 8
 # (train-00096..00103-of-00104), then drop the final two (00102/00103): a separate
 # 400M-token extract (`r5_synth`, NOT part of this recipe) already owns those files, so
 # removing them keeps the raw store disjoint even though the 550M window never reaches them.
-python scripts/download_parquets.py --repo HuggingFaceTB/cosmopedia-v2 --subdir cosmopedia-v2 \
+python data/pipeline/download_parquets.py --repo HuggingFaceTB/cosmopedia-v2 --subdir cosmopedia-v2 \
   --output data/raw/p5_synth --workers 4 --last 8
 rm data/raw/p5_synth/train-00102-of-00104.parquet* data/raw/p5_synth/train-00103-of-00104.parquet*
-python scripts/prepare_data_local.py --input data/raw/p5_synth --tokenizer tokenizer/ \
+python data/pipeline/prepare_data_local.py --input data/raw/p5_synth --tokenizer tokenizer/ \
   --output data/pretrain/p5_synth --max-tokens 550000000 --force --workers 8
 ```
 
@@ -123,7 +123,7 @@ order is free but each `--source` needs its own matching `--start/--take/--val-t
 
 ```bash
 # main_s1 (2.00B)
-python scripts/make_blend_shards.py --output data/pretrain/main_s1 \
+python data/pipeline/make_blend_shards.py --output data/pretrain/main_s1 \
   --source data/pretrain/fineweb3    --start 8 --take 7 --val-take 0 \
   --source data/pretrain/p5_web      --start 0 --take 2 --val-take 0 \
   --source data/pretrain/r5_web      --start 0 --take 4 --val-take 0 \
@@ -133,7 +133,7 @@ python scripts/make_blend_shards.py --output data/pretrain/main_s1 \
   --source data/pretrain/r5_wiki     --start 0 --take 1 --val-take 0
 
 # main_s2 (1.94B)
-python scripts/make_blend_shards.py --output data/pretrain/main_s2 \
+python data/pipeline/make_blend_shards.py --output data/pretrain/main_s2 \
   --source data/pretrain/fineweb3    --start 15 --take 7 --val-take 0 \
   --source data/pretrain/p5_web      --start 2  --take 2 --val-take 0 \
   --source data/pretrain/r5_web      --start 4  --take 4 --val-take 0 \
@@ -144,7 +144,7 @@ python scripts/make_blend_shards.py --output data/pretrain/main_s2 \
   --source data/pretrain/r5_wiki     --start 1  --take 1 --val-take 0
 
 # main_s3 (2.20B)
-python scripts/make_blend_shards.py --output data/pretrain/main_s3 \
+python data/pipeline/make_blend_shards.py --output data/pretrain/main_s3 \
   --source data/pretrain/fineweb3    --start 22 --take 7 --val-take 0 \
   --source data/pretrain/p5_web      --start 4  --take 2 --val-take 0 \
   --source data/pretrain/r5_web      --start 8  --take 4 --val-take 0 \
@@ -154,7 +154,7 @@ python scripts/make_blend_shards.py --output data/pretrain/main_s3 \
   --source data/pretrain/r5_wiki     --start 2  --take 2 --val-take 0
 
 # main_s4 (1.91B)
-python scripts/make_blend_shards.py --output data/pretrain/main_s4 \
+python data/pipeline/make_blend_shards.py --output data/pretrain/main_s4 \
   --source data/pretrain/fineweb3    --start 29 --take 7 --val-take 0 \
   --source data/pretrain/p5_web      --start 6  --take 2 --val-take 0 \
   --source data/pretrain/r5_web      --start 12 --take 4 --val-take 0 \
@@ -191,7 +191,7 @@ sacrifices the next `N` shards immediately after its taken range into
 two `pilot_blend30_val` shards come from `fineweb3[7]` + `cosmopedia3[3]`:
 
 ```bash
-python scripts/make_blend_shards.py --output data/pretrain/pilot_blend30 \
+python data/pipeline/make_blend_shards.py --output data/pretrain/pilot_blend30 \
   --source data/pretrain/fineweb3    --take 7 --val-take 1 \
   --source data/pretrain/cosmopedia3 --take 3 --val-take 1
 # -> data/pretrain/pilot_blend30/        10 interleaved train_XXXX.pt

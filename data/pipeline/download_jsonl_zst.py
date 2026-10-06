@@ -2,11 +2,11 @@
 # Open-source under the MIT License. See LICENSE for details.
 """Download a directory of HF dataset files matching a suffix (e.g. .jsonl.zst).
 
-Like scripts/download_parquets.py but keeps original filenames and supports
+Like data/pipeline/download_parquets.py but keeps original filenames and supports
 arbitrary suffixes (used for DCLM's .jsonl.zst shards).
 
 Usage:
-    python scripts/download_jsonl_zst.py \
+    python data/pipeline/download_jsonl_zst.py \
         --repo mlfoundations/dclm-baseline-1.0 \
         --subdir global-shard_01_of_10/local-shard_0_of_10 \
         --output data/raw/r5_web --suffix .jsonl.zst --first 10

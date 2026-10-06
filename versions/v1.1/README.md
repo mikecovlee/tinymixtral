@@ -16,14 +16,14 @@ that replaced C4 with FineWeb-Edu + Cosmopedia v2.
 
 ```bash
 # tokenizer
-python scripts/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
+python data/pipeline/prepare_tokenizer.py --from-hf TinyLlama/TinyLlama-1.1B-Chat-v1.0 --output tokenizer/
 
 # data: FineWeb-Edu (sample-10BT) + Cosmopedia v2, then mixed 36:4 (89:11, 4B tokens)
-python scripts/prepare_data.py --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
+python data/pipeline/prepare_data.py --dataset HuggingFaceFW/fineweb-edu --subset sample-10BT \
   --tokenizer tokenizer/ --output data/pretrain/fineweb --max-tokens 3560000000 --force
-python scripts/prepare_data.py --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
+python data/pipeline/prepare_data.py --dataset HuggingFaceTB/cosmopedia-v2 --subset cosmopedia-v2 \
   --tokenizer tokenizer/ --output data/pretrain/cosmopedia --max-tokens 440000000 --force
-python scripts/mix_data.py data/pretrain/fineweb data/pretrain/cosmopedia \
+python data/pipeline/mix_data.py data/pretrain/fineweb data/pretrain/cosmopedia \
   --output data/pretrain/smollm_blend --weights 36 4
 
 # train (4B tokens)

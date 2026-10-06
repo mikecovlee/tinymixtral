@@ -15,10 +15,16 @@ venv/
 # Pyenv
 .python-version
 
-# Generated — rebuild with scripts (anchored to repo root so
-# versions/*/data/ source code stays addable)
+# Generated — tokenized data pools, rebuilt with data/*/prepare_*.py drivers.
+# Source (data/pipeline/ tools + data/v{1,2,3}/ recipes) IS tracked; the
+# generated pools stay out (anchored to repo root so versions/*/data/ also
+# stays addable).
 /checkpoints/
-/data/
+/data/*
+!/data/pipeline/
+!/data/v1/
+!/data/v2/
+!/data/v3/
 /tokenizer/
 
 # Eval outputs (source code in evals/ is tracked)

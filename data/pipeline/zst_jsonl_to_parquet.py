@@ -2,11 +2,11 @@
 # Open-source under the MIT License. See LICENSE for details.
 """Convert .jsonl.zst shards (e.g. DCLM) to parquet with a single `text` column.
 
-Output is named `<stem>.parquet.parquet` so scripts/prepare_data_local.py picks
+Output is named `<stem>.parquet.parquet` so data/pipeline/prepare_data_local.py picks
 it up unchanged.
 
 Usage:
-    python scripts/zst_jsonl_to_parquet.py --input data/raw/r5_web --output data/raw/r5_web_pq
+    python data/pipeline/zst_jsonl_to_parquet.py --input data/raw/r5_web --output data/raw/r5_web_pq
 """
 
 import argparse

@@ -4,7 +4,7 @@
 """预 tokenize 数据集到本地 .pt 文件，消除训练时的数据加载瓶颈。
 
 用法:
-    python scripts/prepare_data.py --dataset allenai/c4 --subset en \
+    python data/pipeline/prepare_data.py --dataset allenai/c4 --subset en \
         --tokenizer tokenizer/ --output data/c4/tokenized --max-tokens 4000000000
 """
 
@@ -19,7 +19,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 from model import default_config
 
 
