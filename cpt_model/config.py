@@ -184,8 +184,8 @@ class CPTConfig(TinyMixtralConfig):
             )
         if self.cpt_energy_init_scale <= 0.0:
             raise ValueError("cpt_energy_init_scale must be positive")
-        if self.cpt_price_learning_rate <= 0.0:
-            raise ValueError("cpt_price_learning_rate must be positive")
+        if self.cpt_price_learning_rate < 0.0:
+            raise ValueError("cpt_price_learning_rate must be non-negative")
 
     def to_dict(self) -> dict:
         result = super().to_dict()
