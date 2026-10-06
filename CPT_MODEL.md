@@ -367,6 +367,31 @@ strictly matched budget**. Because the sharper router loses, routing sharpness i
   compute of a single pass; routing is small relative to expert FFNs. The eager
   path computes the valid-token index twice (router and dispatch) by design, to
   keep the router self-contained.
+
+  Measured throughput for the adopted 16L configuration (bs 48 x seq 1024,
+  gradient checkpointing, chunked CE, bf16, single RTX PRO 4500 at its 200 W
+  power limit):
+
+  | setup | tokens/s | vs default |
+  |---|---|---|
+  | default (chunk 16, compiled) | ~20,500 | - |
+  | eager (no `torch.compile`) | 9,947 | -51% |
+  | chunk 8 | 14,073-16,776 | -18 to -31% |
+  | chunk 32 (step lowered to 0.05) | 20,697 | +0.9% |
+  | chunk 64 (step lowered to 0.025) | 20,757 | +1.2% |
+  | corrector disabled | 18,858 | -8% |
+  | whole-model compile (no CUDA graphs) | 20,598 | ~0% |
+
+  A profiler run shows the step is CPU-launch-bound (10.8 s CPU vs 7.0 s CUDA
+  over 3 steps; about 34k kernel launches per step), not FLOP-bound; the wall is
+  kernel-launch overhead plus the 200 W power cap. The only large lever is
+  `torch.compile`, which is already active (2x; it also costs a one-time Triton
+  codegen warmup of about 50 s). Raising the chunk size is a marginal lever and
+  is coupled to `cpt_state_step_size` by the overshoot bound, so it changes the
+  state dynamics; disabling the corrector is slower, not faster. CUDA-graph
+  capture (`mode="reduce-overhead"`) is not usable: the router allocates FP32
+  gradient buffers during capture and raises on the second replay. Net: training
+  throughput has no meaningful headroom left at this configuration.
 - Optional local telemetry, experiment logs, verification archives, old
   evaluations, data tooling and checkpoint-retention extensions are excluded
   from this change.
