@@ -33,7 +33,7 @@
   "cpt_eps_z": "1/1000000",
   "cpt_eps_m": "1/1000000",
   "cpt_eps_init": "1/100000000",
-  "cpt_energy_init_scale": "3/10",
+  "cpt_energy_init_scale": "3/5",
   "cpt_capacity_factor": "5/4",
   "cpt_price_learning_rate": "3/125",
   "cpt_init_seed": 0
